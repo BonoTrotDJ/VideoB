@@ -72,6 +72,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
+  String? _selectedSportFilter;
   String? _editingEntryId;
   String? _activeEntryId;
   String? _activeEntryName;
@@ -86,6 +87,37 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
     }
     return _videoLists.isEmpty ? null : _videoLists.first;
+  }
+
+  List<String> get _availableSports {
+    final selectedList = _selectedList;
+    if (selectedList == null) {
+      return const <String>[];
+    }
+
+    final sports = selectedList.entries
+        .map((_VideoEntry entry) => entry.sportLabel)
+        .whereType<String>()
+        .toSet()
+        .toList()
+      ..sort();
+    return sports;
+  }
+
+  List<_VideoEntry> get _filteredEntries {
+    final selectedList = _selectedList;
+    if (selectedList == null) {
+      return const <_VideoEntry>[];
+    }
+
+    final selectedSport = _selectedSportFilter;
+    if (selectedSport == null || selectedSport.isEmpty) {
+      return selectedList.entries;
+    }
+
+    return selectedList.entries
+        .where((_VideoEntry entry) => entry.sportLabel == selectedSport)
+        .toList();
   }
 
   @override
@@ -161,6 +193,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   void _selectList(String id) {
     setState(() {
       _selectedListId = id;
+      if (_selectedSportFilter != null &&
+          !_availableSports.contains(_selectedSportFilter)) {
+        _selectedSportFilter = null;
+      }
       _editingEntryId = null;
       _entryNameController.clear();
       _entryUrlController.clear();
@@ -804,6 +840,46 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       icon: const Icon(Icons.add_rounded),
                       label: const Text('Nuova Lista'),
                     ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: _availableSports.contains(_selectedSportFilter)
+                          ? _selectedSportFilter
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Filtro sport',
+                      ),
+                      items: <DropdownMenuItem<String>>[
+                        DropdownMenuItem<String>(
+                          value: '',
+                          child: Row(
+                            children: const <Widget>[
+                              Icon(Icons.sports_rounded, size: 18),
+                              SizedBox(width: 10),
+                              Text('Tutti gli sport'),
+                            ],
+                          ),
+                        ),
+                        ..._availableSports.map(
+                          (String sport) => DropdownMenuItem<String>(
+                            value: sport,
+                            child: Row(
+                              children: <Widget>[
+                                Icon(_sportIcon(sport), size: 18),
+                                const SizedBox(width: 10),
+                                Text(sport),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      onChanged: (String? value) {
+                        setState(() {
+                          _selectedSportFilter =
+                              value == null || value.isEmpty ? null : value;
+                        });
+                        Navigator.of(context).pop();
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -931,18 +1007,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   _VideoListSourceType.manual
                               ? 'Ogni voce puo essere modificata, aperta o eliminata.'
                               : 'Le voci arrivano dalla pagina sorgente e si aggiornano su richiesta.',
-                          child: selectedList.entries.isEmpty
+                          child: _filteredEntries.isEmpty
                               ? Text(
-                                  selectedList.sourceType ==
-                                          _VideoListSourceType.manual
-                                      ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
-                                      : 'Nessun link importato ancora. Usa "Aggiorna Lista".',
+                                  selectedList.entries.isEmpty
+                                      ? (selectedList.sourceType ==
+                                              _VideoListSourceType.manual
+                                          ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
+                                          : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
+                                      : 'Nessun risultato per il filtro sport selezionato.',
                                   style: theme.textTheme.bodyLarge?.copyWith(
                                     color: Colors.white70,
                                   ),
                                 )
                               : Column(
-                                  children: selectedList.entries
+                                  children: _filteredEntries
                                       .map(
                                         (_VideoEntry entry) => _buildEntryTile(
                                             selectedList, entry),
