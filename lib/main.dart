@@ -66,6 +66,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _channel = MethodChannel('videob/channel');
   static const _listsKey = 'video_lists_v2';
   static const _selectedListKey = 'selected_video_list_v2';
+  static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
   static const _appVersion = '1.0.0+1';
 
@@ -137,8 +138,16 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Future<void> _loadLists() async {
     final preferences = await SharedPreferences.getInstance();
-    final rawLists = preferences.getString(_listsKey);
-    final selectedListId = preferences.getString(_selectedListKey);
+    var rawLists = preferences.getString(_listsKey);
+    var selectedListId = preferences.getString(_selectedListKey);
+
+    if (rawLists == null || rawLists.isEmpty) {
+      final backupPayload = await _loadBackupPayload();
+      if (backupPayload != null) {
+        rawLists = backupPayload.rawLists;
+        selectedListId = backupPayload.selectedListId;
+      }
+    }
 
     List<_VideoList> parsedLists = <_VideoList>[];
     if (rawLists != null && rawLists.isNotEmpty) {
@@ -189,6 +198,51 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     await preferences.setString(_listsKey, payload);
     if (_selectedListId != null) {
       await preferences.setString(_selectedListKey, _selectedListId!);
+    }
+    await _backupLists(payload, _selectedListId);
+  }
+
+  Future<void> _backupLists(String rawLists, String? selectedListId) async {
+    final backupPayload = jsonEncode(<String, dynamic>{
+      'version': _backupPayloadVersion,
+      'selectedListId': selectedListId,
+      'rawLists': rawLists,
+    });
+
+    try {
+      await _channel.invokeMethod<void>('backupLists', <String, dynamic>{
+        'payload': backupPayload,
+      });
+    } on PlatformException {
+      // Backup esterno best-effort: la persistenza primaria resta locale.
+    }
+  }
+
+  Future<_BackupPayload?> _loadBackupPayload() async {
+    try {
+      final rawPayload = await _channel.invokeMethod<String>('loadBackupLists');
+      if (rawPayload == null || rawPayload.isEmpty) {
+        return null;
+      }
+
+      final decoded = jsonDecode(rawPayload);
+      if (decoded is! Map<String, dynamic>) {
+        return null;
+      }
+
+      final rawLists = decoded['rawLists'] as String?;
+      if (rawLists == null || rawLists.isEmpty) {
+        return null;
+      }
+
+      return _BackupPayload(
+        rawLists: rawLists,
+        selectedListId: decoded['selectedListId'] as String?,
+      );
+    } on PlatformException {
+      return null;
+    } on FormatException {
+      return null;
     }
   }
 
@@ -1436,6 +1490,16 @@ class _ImportedEntryMetadata {
   final String? dayLabel;
   final String? language;
   final String? sportLabel;
+}
+
+class _BackupPayload {
+  const _BackupPayload({
+    required this.rawLists,
+    required this.selectedListId,
+  });
+
+  final String rawLists;
+  final String? selectedListId;
 }
 
 class _VideoList {

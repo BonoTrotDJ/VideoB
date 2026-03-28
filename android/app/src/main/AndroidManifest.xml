@@ -5,9 +5,10 @@
         android:required="false" />
 
     <application
-        android:label="VideoB"
+        android:label="Video BonoTrot"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner">
         <activity
             android:name=".MainActivity"
             android:exported="true"
