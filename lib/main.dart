@@ -73,6 +73,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
   String? _editingEntryId;
+  String? _activeEntryId;
+  String? _activeEntryName;
   bool _isLoading = true;
   bool _isBusy = false;
   String? _status;
@@ -167,7 +169,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _persistLists();
   }
 
-  Future<void> _openUrl(String url) async {
+  Future<void> _openUrl(
+    String url, {
+    String? entryId,
+    String? entryName,
+  }) async {
     final rawUrl = url.trim();
     if (rawUrl.isEmpty) {
       setState(() {
@@ -184,7 +190,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         return;
       }
       setState(() {
-        _status = 'Apertura player interno...';
+        _activeEntryId = entryId;
+        _activeEntryName = entryName;
+        _status = entryName == null
+            ? 'Apertura player interno...'
+            : 'In riproduzione: $entryName';
       });
     } on PlatformException catch (error) {
       if (!mounted) {
@@ -747,15 +757,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     await _persistLists();
   }
 
-  void _loadEntryIntoForm(_VideoEntry entry) {
-    setState(() {
-      _editingEntryId = entry.id;
-      _entryNameController.text = entry.name;
-      _entryUrlController.text = entry.url;
-      _status = 'Voce "${entry.name}" caricata nel form.';
-    });
-  }
-
   void _clearEntryForm() {
     setState(() {
       _editingEntryId = null;
@@ -877,6 +878,35 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                             children: <Widget>[
                               _buildListMeta(theme, selectedList),
                               const SizedBox(height: 18),
+                              if (_activeEntryName != null) ...<Widget>[
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF4B942)
+                                        .withValues(alpha: 0.14),
+                                    borderRadius: BorderRadius.circular(18),
+                                    border: Border.all(
+                                      color: const Color(0xFFF4B942)
+                                          .withValues(alpha: 0.35),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: <Widget>[
+                                      const Icon(
+                                          Icons.play_circle_fill_rounded),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          'Selezionato: $_activeEntryName',
+                                          style: theme.textTheme.titleMedium,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                              ],
                               if (selectedList.sourceType ==
                                   _VideoListSourceType.manual)
                                 _buildManualEditor(theme)
@@ -1026,13 +1056,27 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Widget _buildEntryTile(_VideoList list, _VideoEntry entry) {
+    final sportBackground = _sportBackground(entry.sportLabel);
+    final isActive = _activeEntryId == entry.id;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: ListTile(
+        onTap: () => _openUrl(
+          entry.url,
+          entryId: entry.id,
+          entryName: entry.name,
+        ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),
+          side: BorderSide(
+            color: isActive
+                ? const Color(0xFFF4B942)
+                : Colors.white.withValues(alpha: 0.08),
+            width: isActive ? 2 : 1,
+          ),
         ),
-        tileColor: Colors.white.withValues(alpha: 0.05),
+        tileColor: sportBackground,
         title: Text(entry.name),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1081,21 +1125,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             ),
           ],
         ),
-        leading: const Icon(Icons.play_circle_outline_rounded),
+        leading: Icon(
+          entry.sportLabel == null
+              ? Icons.play_circle_outline_rounded
+              : _sportIcon(entry.sportLabel!),
+        ),
         trailing: Wrap(
           spacing: 8,
           children: <Widget>[
-            if (list.sourceType == _VideoListSourceType.manual)
-              IconButton(
-                tooltip: 'Modifica',
-                onPressed: () => _loadEntryIntoForm(entry),
-                icon: const Icon(Icons.edit_rounded),
-              ),
-            IconButton(
-              tooltip: 'Apri',
-              onPressed: () => _openUrl(entry.url),
-              icon: const Icon(Icons.play_arrow_rounded),
-            ),
             IconButton(
               tooltip: 'Elimina',
               onPressed: () => _deleteEntry(entry),
@@ -1142,6 +1179,38 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         return Icons.sports_mma_rounded;
       default:
         return Icons.sports_rounded;
+    }
+  }
+
+  Color _sportBackground(String? sportLabel) {
+    switch (sportLabel) {
+      case 'Calcio':
+        return const Color(0xFF163A1F);
+      case 'Basket':
+        return const Color(0xFF4A2B16);
+      case 'Tennis':
+        return const Color(0xFF244118);
+      case 'Golf':
+        return const Color(0xFF183B2B);
+      case 'Football Americano':
+        return const Color(0xFF3B2418);
+      case 'Hockey':
+        return const Color(0xFF183245);
+      case 'Baseball':
+        return const Color(0xFF452A2A);
+      case 'Rugby':
+        return const Color(0xFF403018);
+      case 'Volley':
+        return const Color(0xFF3C2A4A);
+      case 'Pallamano':
+        return const Color(0xFF4A3318);
+      case 'Motori':
+        return const Color(0xFF4A1818);
+      case 'Boxe':
+      case 'MMA':
+        return const Color(0xFF3E1823);
+      default:
+        return Colors.white.withValues(alpha: 0.05);
     }
   }
 }
