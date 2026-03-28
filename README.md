@@ -19,6 +19,10 @@ Nel menu laterale puoi creare due tipi di lista:
 
 Per le liste importate, puoi premere `Aggiorna Lista` in qualsiasi momento per ricaricare i contenuti dalla sorgente.
 
+Esempio di sorgente supportata:
+
+- `https://sportsonline.st`
+
 ## Sorgenti supportate
 
 VideoB supporta:
