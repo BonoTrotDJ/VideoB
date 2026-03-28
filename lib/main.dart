@@ -66,6 +66,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _channel = MethodChannel('videob/channel');
   static const _listsKey = 'video_lists_v2';
   static const _selectedListKey = 'selected_video_list_v2';
+  static const _appDisplayName = 'Video BonoTrot';
+  static const _appVersion = '1.0.0+1';
 
   final TextEditingController _entryNameController = TextEditingController();
   final TextEditingController _entryUrlController = TextEditingController();
@@ -502,6 +504,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     var sourceType = _VideoListSourceType.manual;
     var listName = '';
     var sourceUrl = '';
+    final sourceUrlController = TextEditingController();
 
     await showDialog<void>(
       context: context,
@@ -549,13 +552,45 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         _VideoListSourceType.imported) ...<Widget>[
                       const SizedBox(height: 16),
                       TextFormField(
+                        controller: sourceUrlController,
                         decoration: const InputDecoration(
                           labelText: 'URL da importare',
                           hintText: 'https://...',
+                          suffixIcon: Icon(Icons.content_paste_rounded),
                         ),
                         onChanged: (String value) {
                           sourceUrl = value;
                         },
+                        onTapOutside: (_) {
+                          FocusManager.instance.primaryFocus?.unfocus();
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton.tonalIcon(
+                          onPressed: () async {
+                            final clipboardData = await Clipboard.getData(
+                              Clipboard.kTextPlain,
+                            );
+                            final pastedText =
+                                clipboardData?.text?.trim() ?? '';
+                            if (pastedText.isEmpty) {
+                              return;
+                            }
+
+                            setModalState(() {
+                              sourceUrl = pastedText;
+                              sourceUrlController.text = pastedText;
+                              sourceUrlController.selection =
+                                  TextSelection.collapsed(
+                                offset: pastedText.length,
+                              );
+                            });
+                          },
+                          icon: const Icon(Icons.content_paste_go_rounded),
+                          label: const Text('Incolla'),
+                        ),
                       ),
                     ],
                   ],
@@ -914,6 +949,28 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   },
                 ),
               ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      _appDisplayName,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Versione $_appVersion',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -1072,9 +1129,28 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         const SizedBox(height: 14),
         TextField(
           controller: _entryUrlController,
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'URL video',
             hintText: 'https://...',
+            suffixIcon: IconButton(
+              tooltip: 'Incolla',
+              onPressed: () async {
+                final clipboardData = await Clipboard.getData(
+                  Clipboard.kTextPlain,
+                );
+                final pastedText = clipboardData?.text?.trim() ?? '';
+                if (pastedText.isEmpty) {
+                  return;
+                }
+
+                _entryUrlController.text = pastedText;
+                _entryUrlController.selection = TextSelection.collapsed(
+                  offset: pastedText.length,
+                );
+                setState(() {});
+              },
+              icon: const Icon(Icons.content_paste_go_rounded),
+            ),
           ),
         ),
         const SizedBox(height: 18),

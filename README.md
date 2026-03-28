@@ -1,6 +1,6 @@
-# VideoB
+# Video BonoTrot
 
-VideoB e un lettore video per Android TV / Google TV che apre stream da liste URL importate oppure da liste create manualmente.
+Video BonoTrot e un lettore video per Android TV / Google TV che apre stream da liste URL importate oppure da liste create manualmente.
 
 L'app permette di:
 
@@ -15,7 +15,7 @@ L'app permette di:
 Nel menu laterale puoi creare due tipi di lista:
 
 - `Manuale`: aggiungi a mano i link video che vuoi salvare
-- `Da URL`: inserisci un URL sorgente e lascia che VideoB importi i link compatibili
+- `Da URL`: inserisci un URL sorgente e lascia che Video BonoTrot importi i link compatibili
 
 Per le liste importate, puoi premere `Aggiorna Lista` in qualsiasi momento per ricaricare i contenuti dalla sorgente.
 
@@ -25,7 +25,7 @@ Esempio di sorgente supportata:
 
 ## Sorgenti supportate
 
-VideoB supporta:
+Video BonoTrot supporta:
 
 - liste testuali con link video `.php`
 - pagine da cui estrarre link candidati
