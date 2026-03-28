@@ -228,6 +228,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           name: _buildImportedEntryName(links[i], i),
           url: links[i],
           language: _extractLanguageFromUrl(links[i]),
+          sportLabel:
+              _detectSportFromName(_buildImportedEntryName(links[i], i)),
         ),
     ];
   }
@@ -277,6 +279,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           eventTime: metadata.eventTime,
           dayLabel: metadata.dayLabel,
           language: metadata.language,
+          sportLabel: metadata.sportLabel,
         ),
       );
       previousEnd = match.end;
@@ -319,7 +322,61 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       eventTime: eventTime,
       dayLabel: effectiveDay,
       language: _extractLanguageFromUrl(url),
+      sportLabel: _detectSportFromName(cleaned),
     );
+  }
+
+  String? _detectSportFromName(String name) {
+    final value = name.toLowerCase();
+
+    if (value.contains('world tour')) {
+      return 'Golf';
+    }
+    if (value.contains('grand prix')) {
+      return 'Motori';
+    }
+
+    const sportMatchers = <String, String>{
+      'nba': 'Basket',
+      'basket': 'Basket',
+      'euroleague': 'Basket',
+      'boxing': 'Boxe',
+      'boxing ': 'Boxe',
+      'zuffa': 'Boxe',
+      'ufc': 'MMA',
+      'mma': 'MMA',
+      'formula 1': 'Motori',
+      'f1 ': 'Motori',
+      'motogp': 'Motori',
+      'tennis': 'Tennis',
+      'atp': 'Tennis',
+      'wta': 'Tennis',
+      'golf': 'Golf',
+      'nfl': 'Football Americano',
+      'nhl': 'Hockey',
+      'hockey': 'Hockey',
+      'baseball': 'Baseball',
+      'mlb': 'Baseball',
+      'rugby': 'Rugby',
+      'cricket': 'Cricket',
+      'volley': 'Volley',
+      'volleyball': 'Volley',
+      'handball': 'Pallamano',
+    };
+
+    for (final entry in sportMatchers.entries) {
+      if (value.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    if (value.contains(' x ') ||
+        value.contains(' vs ') ||
+        value.contains(' v ')) {
+      return 'Calcio';
+    }
+
+    return null;
   }
 
   String _normalizeContextText(String rawContext) {
@@ -1005,10 +1062,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         visualDensity: VisualDensity.compact,
                         label: Text(entry.language!),
                       ),
-                    if (_extractChannelCode(entry.url) != null)
+                    if (entry.sportLabel != null)
                       Chip(
                         visualDensity: VisualDensity.compact,
-                        label: Text(_extractChannelCode(entry.url)!),
+                        avatar: Icon(
+                          _sportIcon(entry.sportLabel!),
+                          size: 16,
+                        ),
+                        label: Text(entry.sportLabel!),
                       ),
                   ],
                 ),
@@ -1054,21 +1115,34 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return '$day/$month $hour:$minute';
   }
 
-  String? _extractChannelCode(String url) {
-    final uri = Uri.tryParse(url);
-    final filename = uri?.pathSegments.isNotEmpty == true
-        ? uri!.pathSegments.last.toLowerCase()
-        : '';
-    if (!filename.endsWith('.php')) {
-      return null;
+  IconData _sportIcon(String sportLabel) {
+    switch (sportLabel) {
+      case 'Calcio':
+        return Icons.sports_soccer_rounded;
+      case 'Basket':
+        return Icons.sports_basketball_rounded;
+      case 'Tennis':
+        return Icons.sports_tennis_rounded;
+      case 'Baseball':
+        return Icons.sports_baseball_rounded;
+      case 'Golf':
+        return Icons.sports_golf_rounded;
+      case 'Football Americano':
+        return Icons.sports_football_rounded;
+      case 'Hockey':
+        return Icons.sports_hockey_rounded;
+      case 'Volley':
+        return Icons.sports_volleyball_rounded;
+      case 'Pallamano':
+        return Icons.sports_handball_rounded;
+      case 'Motori':
+        return Icons.sports_motorsports_rounded;
+      case 'Boxe':
+      case 'MMA':
+        return Icons.sports_mma_rounded;
+      default:
+        return Icons.sports_rounded;
     }
-
-    final channelCode = filename.replaceAll('.php', '');
-    if (channelCode.isEmpty) {
-      return null;
-    }
-
-    return channelCode.toUpperCase();
   }
 }
 
@@ -1089,6 +1163,7 @@ class _VideoEntry {
     this.eventTime,
     this.dayLabel,
     this.language,
+    this.sportLabel,
   });
 
   final String id;
@@ -1097,6 +1172,7 @@ class _VideoEntry {
   final String? eventTime;
   final String? dayLabel;
   final String? language;
+  final String? sportLabel;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -1106,6 +1182,7 @@ class _VideoEntry {
       'eventTime': eventTime,
       'dayLabel': dayLabel,
       'language': language,
+      'sportLabel': sportLabel,
     };
   }
 
@@ -1117,6 +1194,7 @@ class _VideoEntry {
       eventTime: json['eventTime'] as String?,
       dayLabel: json['dayLabel'] as String?,
       language: json['language'] as String?,
+      sportLabel: json['sportLabel'] as String?,
     );
   }
 }
@@ -1127,12 +1205,14 @@ class _ImportedEntryMetadata {
     required this.eventTime,
     required this.dayLabel,
     required this.language,
+    required this.sportLabel,
   });
 
   final String name;
   final String? eventTime;
   final String? dayLabel;
   final String? language;
+  final String? sportLabel;
 }
 
 class _VideoList {
