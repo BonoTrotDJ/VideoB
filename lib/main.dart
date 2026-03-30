@@ -69,6 +69,15 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
   static const _appVersion = '1.0.0+1';
+  static const List<String> _weekdayLabels = <String>[
+    'Domenica',
+    'Lunedì',
+    'Martedì',
+    'Mercoledì',
+    'Giovedì',
+    'Venerdì',
+    'Sabato',
+  ];
 
   final TextEditingController _entryNameController = TextEditingController();
   final TextEditingController _entryUrlController = TextEditingController();
@@ -120,6 +129,27 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     return selectedList.entries
         .where((_VideoEntry entry) => entry.sportLabel == selectedSport)
+        .toList();
+  }
+
+  List<MapEntry<String, List<_VideoEntry>>> get _groupedFilteredEntries {
+    final grouped = <String, List<_VideoEntry>>{};
+    final orderedDays = <String>[];
+
+    for (final entry in _filteredEntries) {
+      final day = entry.dayLabel?.trim().isNotEmpty == true
+          ? entry.dayLabel!.trim()
+          : 'Altri eventi';
+      if (!grouped.containsKey(day)) {
+        grouped[day] = <_VideoEntry>[];
+        orderedDays.add(day);
+      }
+      grouped[day]!.add(entry);
+    }
+
+    return orderedDays
+        .map((String day) =>
+            MapEntry<String, List<_VideoEntry>>(day, grouped[day]!))
         .toList();
   }
 
@@ -346,48 +376,19 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       );
     }
 
-    final body = response.body.replaceAll('\n', ' ').replaceAll('\r', ' ');
-    final urlPattern = RegExp(r'https?://\S+');
-    final matches = urlPattern.allMatches(body).toList();
-    final entries = <_VideoEntry>[];
-    var previousEnd = 0;
-    String? currentDay;
-
-    for (var i = 0; i < matches.length; i++) {
-      final match = matches[i];
-      final rawUrl = match.group(0)?.trim() ?? '';
-      if (rawUrl.isEmpty || !_isPhpUrl(rawUrl)) {
-        previousEnd = match.end;
-        continue;
-      }
-
-      final contextChunk = body.substring(previousEnd, match.start).trim();
-      final dayFromChunk = _extractDayFromContext(contextChunk);
-      if (dayFromChunk != null) {
-        currentDay = dayFromChunk;
-      }
-
-      final metadata = _extractPlainTextMetadata(
-        contextChunk,
-        rawUrl,
-        i,
-        currentDay: currentDay,
-      );
-      entries.add(
+    final events = _parsePlainTextSchedule(response.body);
+    return <_VideoEntry>[
+      for (var i = 0; i < events.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
-          name: metadata.name,
-          url: rawUrl,
-          eventTime: metadata.eventTime,
-          dayLabel: metadata.dayLabel,
-          language: metadata.language,
-          sportLabel: metadata.sportLabel,
+          name: events[i].title,
+          url: events[i].url,
+          eventTime: events[i].eventTime,
+          dayLabel: events[i].dayLabel,
+          language: events[i].languageLabel,
+          sportLabel: events[i].sportLabel,
         ),
-      );
-      previousEnd = match.end;
-    }
-
-    return entries;
+    ];
   }
 
   bool _isPhpUrl(String url) {
@@ -396,36 +397,108 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return path.endsWith('.php');
   }
 
-  _ImportedEntryMetadata _extractPlainTextMetadata(
-    String rawContext,
-    String url,
-    int index, {
-    String? currentDay,
-  }) {
-    var cleaned = _normalizeContextText(rawContext);
-    final inlineDay = _extractDayFromContext(cleaned);
-    final effectiveDay = inlineDay ?? currentDay;
-    if (inlineDay != null) {
-      cleaned = _removeDayMarkers(cleaned).trim();
+  List<_ImportedScheduleEvent> _parsePlainTextSchedule(String raw) {
+    final lines = raw.split(RegExp(r'\r?\n'));
+    final filteredLines = lines.where((String line) {
+      return line.contains('|') && line.contains('https://');
+    }).toList();
+    final input =
+        filteredLines.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (input.isEmpty) {
+      return const <_ImportedScheduleEvent>[];
     }
 
-    final timeMatch = RegExp(r'(\d{1,2}:\d{2})\s*$').firstMatch(cleaned);
-    final eventTime = timeMatch?.group(1);
-    if (timeMatch != null && eventTime != null) {
-      cleaned = cleaned.substring(0, timeMatch.start).trim();
-    }
-
-    if (cleaned.isEmpty) {
-      cleaned = 'Link ${index + 1}';
-    }
-
-    return _ImportedEntryMetadata(
-      name: cleaned,
-      eventTime: eventTime,
-      dayLabel: effectiveDay,
-      language: _extractLanguageFromUrl(url),
-      sportLabel: _detectSportFromName(cleaned),
+    final pattern = RegExp(
+      r'(\d{2}:\d{2})\s+(.+?)\s*\|\s*(https?:\/\/\S+)(?=\s+\d{2}:\d{2}\s+.+?\s*\|\s*https?:\/\/|\s*$)',
     );
+    final matches = pattern.allMatches(input);
+    final grouped = <String, _ImportedScheduleAccumulator>{};
+    final orderedKeys = <String>[];
+
+    for (final match in matches) {
+      final rawTime = (match.group(1) ?? '').trim();
+      final rawTitle = (match.group(2) ?? '').trim();
+      final url = (match.group(3) ?? '').trim();
+      final title = _cleanImportedTitle(rawTitle);
+      if (rawTime.isEmpty || title.isEmpty || url.isEmpty || !_isPhpUrl(url)) {
+        continue;
+      }
+
+      final time = _shiftEventTime(rawTime);
+      final key = '${time.toLowerCase()}|${title.toLowerCase()}';
+      final language = _extractLanguageFromUrl(url) ?? 'Lingua non indicata';
+
+      if (!grouped.containsKey(key)) {
+        grouped[key] = _ImportedScheduleAccumulator(
+          title: title,
+          eventTime: time,
+          sportLabel: _detectSportFromName(title),
+          primaryUrl: url,
+        );
+        orderedKeys.add(key);
+      }
+
+      grouped[key]!.addLanguage(language);
+    }
+
+    final results = <_ImportedScheduleEvent>[];
+    var dayIndex = _currentDayIndex();
+    String? previousTime;
+
+    for (final key in orderedKeys) {
+      final event = grouped[key];
+      if (event == null) {
+        continue;
+      }
+
+      if (previousTime != null && event.eventTime.compareTo(previousTime) < 0) {
+        dayIndex = (dayIndex + 1) % _weekdayLabels.length;
+      }
+
+      results.add(
+        _ImportedScheduleEvent(
+          title: event.title,
+          url: event.primaryUrl,
+          eventTime: event.eventTime,
+          dayLabel: _weekdayLabels[dayIndex],
+          languageLabel: event.languageLabel,
+          sportLabel: event.sportLabel,
+        ),
+      );
+      previousTime = event.eventTime;
+    }
+
+    return results;
+  }
+
+  String _shiftEventTime(String value) {
+    final parts = value.split(':');
+    if (parts.length != 2) {
+      return value;
+    }
+
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) {
+      return value;
+    }
+
+    return '${((hour + 1) % 24).toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+  }
+
+  int _currentDayIndex() {
+    final weekday = DateTime.now().weekday;
+    return weekday % 7;
+  }
+
+  String _cleanImportedTitle(String value) {
+    var cleaned = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    cleaned = cleaned
+        .replaceAll(RegExp(r'\bSATURDAY\b', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\bSUNDAY\b', caseSensitive: false), '')
+        .trim();
+    cleaned = cleaned.replaceFirst(RegExp(r'^\d{2}:\d{2}\s+'), '').trim();
+    return cleaned;
   }
 
   String? _detectSportFromName(String name) {
@@ -481,31 +554,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return null;
   }
 
-  String _normalizeContextText(String rawContext) {
-    var cleaned = rawContext.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (cleaned.endsWith('|')) {
-      cleaned = cleaned.substring(0, cleaned.length - 1).trim();
-    }
-    return cleaned;
-  }
-
-  String? _extractDayFromContext(String rawContext) {
-    final normalized = rawContext.toUpperCase();
-    if (normalized.contains('SATURDAY')) {
-      return 'Sabato';
-    }
-    if (normalized.contains('SUNDAY')) {
-      return 'Domenica';
-    }
-    return null;
-  }
-
-  String _removeDayMarkers(String rawContext) {
-    return rawContext
-        .replaceAll(RegExp(r'\bSATURDAY\b', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\bSUNDAY\b', caseSensitive: false), '');
-  }
-
   String? _extractLanguageFromUrl(String url) {
     final uri = Uri.tryParse(url);
     final filename = uri?.pathSegments.isNotEmpty == true
@@ -514,23 +562,23 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final channelCode = filename.replaceAll('.php', '');
 
     const channelLanguageMap = <String, String>{
-      'hd1': 'English',
-      'hd2': 'English',
-      'hd3': 'German',
-      'hd4': 'French',
-      'hd5': 'English',
-      'hd6': 'Spanish',
-      'hd7': 'Italian',
-      'hd8': 'English',
-      'hd9': 'Arabic & Spanish',
-      'hd10': 'Spanish',
-      'hd11': 'English & Spanish',
-      'br1': 'Brazilian',
-      'br2': 'Brazilian',
-      'br3': 'Brazilian',
-      'br4': 'Brazilian',
-      'br5': 'Brazilian',
-      'br6': 'Brazilian',
+      'hd1': 'Inglese',
+      'hd2': 'Inglese',
+      'hd3': 'Tedesco',
+      'hd4': 'Francese',
+      'hd5': 'Inglese',
+      'hd6': 'Spagnolo',
+      'hd7': 'Italiano',
+      'hd8': 'Italiano',
+      'hd9': 'Italiano',
+      'hd10': 'Italiano e spagnolo',
+      'hd11': 'Inglese e spagnolo',
+      'br1': 'Portoghese (Brasile)',
+      'br2': 'Portoghese (Brasile)',
+      'br3': 'Portoghese (Brasile)',
+      'br4': 'Portoghese (Brasile)',
+      'br5': 'Portoghese (Brasile)',
+      'br6': 'Portoghese (Brasile)',
     };
 
     final mapped = channelLanguageMap[channelCode];
@@ -546,9 +594,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final folder = segments[segments.length - 2].toLowerCase();
     switch (folder) {
       case 'pt':
-        return 'Portuguese';
+        return 'Portoghese';
       case 'bra':
-        return 'Brazilian';
+        return 'Portoghese (Brasile)';
       default:
         return null;
     }
@@ -1019,12 +1067,33 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   ),
                                 )
                               : Column(
-                                  children: _filteredEntries
-                                      .map(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _groupedFilteredEntries.expand(
+                                      (MapEntry<String, List<_VideoEntry>>
+                                          group) {
+                                    final widgets = <Widget>[
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 4,
+                                          bottom: 12,
+                                        ),
+                                        child: Text(
+                                          group.key,
+                                          style: theme.textTheme.headlineSmall
+                                              ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                    ];
+                                    widgets.addAll(
+                                      group.value.map(
                                         (_VideoEntry entry) => _buildEntryTile(
                                             selectedList, entry),
-                                      )
-                                      .toList(),
+                                      ),
+                                    );
+                                    return widgets;
+                                  }).toList(),
                                 ),
                         ),
                       ],
@@ -1191,11 +1260,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       Chip(
                         visualDensity: VisualDensity.compact,
                         label: Text(entry.eventTime!),
-                      ),
-                    if (entry.dayLabel != null)
-                      Chip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(entry.dayLabel!),
                       ),
                     if (entry.language != null)
                       Chip(
@@ -1364,19 +1428,51 @@ class _VideoEntry {
   }
 }
 
-class _ImportedEntryMetadata {
-  const _ImportedEntryMetadata({
-    required this.name,
+class _ImportedScheduleAccumulator {
+  _ImportedScheduleAccumulator({
+    required this.title,
+    required this.eventTime,
+    required this.sportLabel,
+    required this.primaryUrl,
+  });
+
+  final String title;
+  final String eventTime;
+  final String? sportLabel;
+  final String primaryUrl;
+  final Set<String> _languages = <String>{};
+
+  void addLanguage(String language) {
+    if (language.trim().isEmpty) {
+      return;
+    }
+    _languages.add(language.trim());
+  }
+
+  String get languageLabel {
+    if (_languages.isEmpty) {
+      return 'Lingua non indicata';
+    }
+    final sorted = _languages.toList()..sort();
+    return sorted.join(', ');
+  }
+}
+
+class _ImportedScheduleEvent {
+  const _ImportedScheduleEvent({
+    required this.title,
+    required this.url,
     required this.eventTime,
     required this.dayLabel,
-    required this.language,
+    required this.languageLabel,
     required this.sportLabel,
   });
 
-  final String name;
-  final String? eventTime;
-  final String? dayLabel;
-  final String? language;
+  final String title;
+  final String url;
+  final String eventTime;
+  final String dayLabel;
+  final String languageLabel;
   final String? sportLabel;
 }
 
