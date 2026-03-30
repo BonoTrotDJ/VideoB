@@ -9,6 +9,9 @@ void main() {
   runApp(const VideoBApp());
 }
 
+const String _sportListName = 'Sport';
+const String _sportListSourceUrl = 'https://sportsonline.st/prog.txt';
+
 class VideoBApp extends StatelessWidget {
   const VideoBApp({super.key});
 
@@ -47,6 +50,34 @@ class VideoBApp extends StatelessWidget {
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(20),
             borderSide: const BorderSide(color: accent, width: 2),
+          ),
+        ),
+        segmentedButtonTheme: SegmentedButtonThemeData(
+          style: ButtonStyle(
+            backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+              (Set<WidgetState> states) {
+                if (states.contains(WidgetState.selected)) {
+                  return Colors.white;
+                }
+                return Colors.white.withValues(alpha: 0.06);
+              },
+            ),
+            foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+              (Set<WidgetState> states) {
+                if (states.contains(WidgetState.selected)) {
+                  return const Color(0xFF07111F);
+                }
+                return Colors.white;
+              },
+            ),
+            side: WidgetStateProperty.resolveWith<BorderSide?>(
+              (Set<WidgetState> states) {
+                if (states.contains(WidgetState.selected)) {
+                  return const BorderSide(color: Colors.white, width: 1.5);
+                }
+                return BorderSide(color: Colors.white.withValues(alpha: 0.14));
+              },
+            ),
           ),
         ),
       ),
@@ -681,6 +712,36 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
   }
 
+  Future<void> _ensureSportList() async {
+    final existingList = _videoLists.cast<_VideoList?>().firstWhere(
+          (_VideoList? item) =>
+              item?.sourceType == _VideoListSourceType.imported &&
+              item?.sourceUrl == _sportListSourceUrl,
+          orElse: () => null,
+        );
+
+    if (existingList != null) {
+      setState(() {
+        _selectedListId = existingList.id;
+        _status = 'Lista "$_sportListName" selezionata.';
+      });
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+
+    await _createList(
+      name: _sportListName,
+      sourceType: _VideoListSourceType.imported,
+      sourceUrl: _sportListSourceUrl,
+    );
+  }
+
   Future<void> _deleteList(_VideoList list) async {
     if (_videoLists.length == 1) {
       setState(() {
@@ -946,6 +1007,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     final isSelected = list.id == _selectedListId;
                     return ListTile(
                       selected: isSelected,
+                      selectedTileColor: Colors.white,
+                      selectedColor: const Color(0xFF07111F),
                       leading: Icon(
                         list.sourceType == _VideoListSourceType.manual
                             ? Icons.edit_note_rounded
@@ -969,25 +1032,28 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 ),
               ),
               const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      _appDisplayName,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+              InkWell(
+                onTap: _ensureSportList,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        _appDisplayName,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Versione $_appVersion',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
+                      const SizedBox(height: 4),
+                      Text(
+                        'Versione $_appVersion',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.white70,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ],
