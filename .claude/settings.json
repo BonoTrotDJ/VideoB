@@ -7,7 +7,10 @@
       "Bash(flutter devices:*)",
       "Bash(wait %1)",
       "Bash(jobs)",
-      "Bash(flutter run:*)"
+      "Bash(flutter run:*)",
+      "Bash(adb devices:*)",
+      "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 shell pm list packages)",
+      "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 shell dumpsys package com.videob.vb_google)"
     ]
   }
 }

@@ -1,13 +1,21 @@
 package com.videob.vb_google
 
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
 import android.text.InputType
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.util.TypedValue
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -110,6 +118,30 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "openExternalPlayer" -> {
+                    val url = call.argument<String>("url")?.trim().orEmpty()
+                    if (url.isBlank()) {
+                        result.error("invalid_url", "URL non valido.", null)
+                        return@setMethodCallHandler
+                    }
+                    runOnUiThread {
+                        extractStreamViaWebView(
+                            url = url,
+                            onFound = { mediaUrl ->
+                                launchVideoUrl(mediaUrl)
+                                result.success(mediaUrl)
+                            },
+                            onTimeout = {
+                                result.error(
+                                    "no_stream",
+                                    "Nessun stream trovato nella pagina (timeout).",
+                                    null,
+                                )
+                            },
+                        )
+                    }
+                }
+
                 "editText" -> {
                     val title = call.argument<String>("title").orEmpty()
                     val initialValue = call.argument<String>("initialValue").orEmpty()
@@ -131,6 +163,95 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun launchVideoUrl(mediaUrl: String) {
+        val mimeType = when {
+            mediaUrl.contains(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
+            mediaUrl.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
+            mediaUrl.contains(".mp4", ignoreCase = true) -> "video/mp4"
+            else -> "video/*"
+        }
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(Uri.parse(mediaUrl), mimeType)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(Intent.createChooser(viewIntent, "Apri con..."))
+        } catch (_: android.content.ActivityNotFoundException) {
+            val fallback = Intent(this, PlayerActivity::class.java).apply {
+                putExtra(PlayerActivity.EXTRA_URL, mediaUrl)
+            }
+            startActivity(fallback)
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun extractStreamViaWebView(
+        url: String,
+        timeoutMs: Long = 15000,
+        onFound: (String) -> Unit,
+        onTimeout: () -> Unit,
+    ) {
+        val mediaRegex = Regex(
+            """https?://[^\s"'<>]+\.(m3u8|mpd|mp4)(\?[^\s"'<>]*)?""",
+            RegexOption.IGNORE_CASE,
+        )
+        var resolved = false
+
+        val webView = WebView(this)
+        val container = window.decorView as ViewGroup
+        webView.layoutParams = ViewGroup.LayoutParams(1, 1)
+        container.addView(webView)
+
+        fun cleanup() {
+            container.removeView(webView)
+            webView.stopLoading()
+            webView.destroy()
+        }
+
+        webView.postDelayed({
+            if (!resolved) {
+                resolved = true
+                cleanup()
+                onTimeout()
+            }
+        }, timeoutMs)
+
+        webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            mediaPlaybackRequiresUserGesture = false
+            userAgentString =
+                "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                val reqUrl = request.url.toString()
+                if (!resolved && mediaRegex.containsMatchIn(reqUrl)) {
+                    resolved = true
+                    runOnUiThread {
+                        cleanup()
+                        onFound(reqUrl)
+                    }
+                }
+                return null
+            }
+        }
+
+        webView.loadUrl(
+            url,
+            mapOf(
+                "Referer" to "https://sportsonline.si/",
+                "Origin" to "https://sportsonline.si",
+            ),
+        )
     }
 
     private fun showSystemTextEditor(

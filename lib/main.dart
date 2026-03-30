@@ -325,6 +325,76 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _persistLists();
   }
 
+  Future<void> _openWithExternalPlayer(
+    String url, {
+    String? entryName,
+  }) async {
+    setState(() {
+      _isBusy = true;
+      _status = 'Estrazione link video in corso...';
+    });
+
+    try {
+      await _channel.invokeMethod<String>(
+        'openExternalPlayer',
+        <String, dynamic>{'url': url},
+      );
+      if (!mounted) return;
+      setState(() {
+        _status = 'Aperto con player esterno.';
+      });
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = e.message ?? 'Impossibile estrarre il link video.';
+      });
+    } finally {
+      if (mounted) setState(() => _isBusy = false);
+    }
+  }
+
+  Future<void> _askPlayerMode(String url, String? entryId, String entryName) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('Scegli il player'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ListTile(
+              autofocus: true,
+              leading: const Icon(Icons.play_circle_fill_rounded),
+              title: const Text('Player interno'),
+              subtitle: const Text('WebView integrata'),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _openUrl(url, entryId: entryId, entryName: entryName);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.open_in_new_rounded),
+              title: const Text('Player esterno'),
+              subtitle: const Text('Estrae il link video e apre un\'app esterna'),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _openWithExternalPlayer(url, entryName: entryName);
+              },
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Annulla'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openEntryWithChannelPicker(_VideoEntry entry) async {
     final channels = entry.channels.isNotEmpty
         ? entry.channels
@@ -335,7 +405,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     if (channels.isEmpty) return;
 
     if (channels.length == 1) {
-      await _openUrl(channels.first.url, entryId: entry.id, entryName: entry.name);
+      await _askPlayerMode(channels.first.url, entry.id, entry.name);
       return;
     }
 
@@ -368,7 +438,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 ),
                 onTap: () {
                   Navigator.of(ctx).pop();
-                  _openUrl(ch.url, entryId: entry.id, entryName: entry.name);
+                  _askPlayerMode(ch.url, entry.id, entry.name);
                 },
               );
             }),
@@ -836,7 +906,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: ButtonStyle(
+              backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+                (Set<WidgetState> states) {
+                  if (states.contains(WidgetState.focused)) return Colors.white;
+                  return Colors.red;
+                },
+              ),
+              foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                (Set<WidgetState> states) {
+                  if (states.contains(WidgetState.focused)) return Colors.red;
+                  return Colors.white;
+                },
+              ),
+            ),
             child: const Text('Elimina'),
           ),
         ],
