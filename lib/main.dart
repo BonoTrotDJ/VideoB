@@ -398,24 +398,29 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   List<_ImportedScheduleEvent> _parsePlainTextSchedule(String raw) {
-    final lines = raw.split(RegExp(r'\r?\n'));
-    final filteredLines = lines.where((String line) {
-      return line.contains('|') && line.contains('https://');
-    }).toList();
-    final input =
-        filteredLines.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (input.isEmpty) {
-      return const <_ImportedScheduleEvent>[];
-    }
-
-    final pattern = RegExp(
-      r'(\d{2}:\d{2})\s+(.+?)\s*\|\s*(https?:\/\/\S+)(?=\s+\d{2}:\d{2}\s+.+?\s*\|\s*https?:\/\/|\s*$)',
-    );
-    final matches = pattern.allMatches(input);
     final grouped = <String, _ImportedScheduleAccumulator>{};
     final orderedKeys = <String>[];
+    String? currentDayLabel;
 
-    for (final match in matches) {
+    for (final rawLine in raw.split(RegExp(r'\r?\n'))) {
+      final line = rawLine.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (line.isEmpty) {
+        continue;
+      }
+
+      final dayLabel = _mapEnglishDayToItalian(line);
+      if (dayLabel != null) {
+        currentDayLabel = dayLabel;
+        continue;
+      }
+
+      final match = RegExp(
+        r'^(\d{2}:\d{2})\s+(.+?)\s*\|\s*(https?:\/\/\S+)$',
+      ).firstMatch(line);
+      if (match == null) {
+        continue;
+      }
+
       final rawTime = (match.group(1) ?? '').trim();
       final rawTitle = (match.group(2) ?? '').trim();
       final url = (match.group(3) ?? '').trim();
@@ -434,6 +439,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           eventTime: time,
           sportLabel: _detectSportFromName(title),
           primaryUrl: url,
+          dayLabel: currentDayLabel,
         );
         orderedKeys.add(key);
       }
@@ -451,7 +457,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         continue;
       }
 
-      if (previousTime != null && event.eventTime.compareTo(previousTime) < 0) {
+      if (event.dayLabel == null &&
+          previousTime != null &&
+          event.eventTime.compareTo(previousTime) < 0) {
         dayIndex = (dayIndex + 1) % _weekdayLabels.length;
       }
 
@@ -460,7 +468,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           title: event.title,
           url: event.primaryUrl,
           eventTime: event.eventTime,
-          dayLabel: _weekdayLabels[dayIndex],
+          dayLabel: event.dayLabel ?? _weekdayLabels[dayIndex],
           languageLabel: event.languageLabel,
           sportLabel: event.sportLabel,
         ),
@@ -489,6 +497,27 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   int _currentDayIndex() {
     final weekday = DateTime.now().weekday;
     return weekday % 7;
+  }
+
+  String? _mapEnglishDayToItalian(String value) {
+    switch (value.trim().toUpperCase()) {
+      case 'MONDAY':
+        return 'Lunedì';
+      case 'TUESDAY':
+        return 'Martedì';
+      case 'WEDNESDAY':
+        return 'Mercoledì';
+      case 'THURSDAY':
+        return 'Giovedì';
+      case 'FRIDAY':
+        return 'Venerdì';
+      case 'SATURDAY':
+        return 'Sabato';
+      case 'SUNDAY':
+        return 'Domenica';
+      default:
+        return null;
+    }
   }
 
   String _cleanImportedTitle(String value) {
@@ -1434,12 +1463,14 @@ class _ImportedScheduleAccumulator {
     required this.eventTime,
     required this.sportLabel,
     required this.primaryUrl,
+    required this.dayLabel,
   });
 
   final String title;
   final String eventTime;
   final String? sportLabel;
   final String primaryUrl;
+  final String? dayLabel;
   final Set<String> _languages = <String>{};
 
   void addLanguage(String language) {
