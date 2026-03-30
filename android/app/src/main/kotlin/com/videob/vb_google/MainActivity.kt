@@ -157,8 +157,7 @@ class MainActivity : FlutterActivity() {
                     InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             } else {
                 InputType.TYPE_CLASS_TEXT or
-                    InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
-                    InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                    InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             }
             imeOptions = EditorInfo.IME_ACTION_DONE
         }
@@ -178,6 +177,18 @@ class MainActivity : FlutterActivity() {
                 onCancel()
             }
             .create()
+
+        editText.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                onSubmit(editText.text?.toString().orEmpty())
+                val imm = getSystemService(InputMethodManager::class.java)
+                imm?.hideSoftInputFromWindow(editText.windowToken, 0)
+                dialog.dismiss()
+                true
+            } else {
+                false
+            }
+        }
 
         dialog.setOnShowListener {
             editText.requestFocus()
