@@ -1121,10 +1121,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   return AnimatedContainer(
                                     duration: const Duration(milliseconds: 150),
                                     decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? accent
-                                          : hasFocus
-                                              ? const Color(0xFFFF4444).withValues(alpha: 0.25)
+                                      color: hasFocus
+                                          ? Colors.white
+                                          : isSelected
+                                              ? accent
                                               : Colors.white
                                                   .withValues(alpha: 0.06),
                                       borderRadius: BorderRadius.circular(14),
@@ -1148,7 +1148,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                                   : Icons
                                                       .cloud_download_rounded,
                                               size: 18,
-                                              color: isSelected
+                                              color: (isSelected || hasFocus)
                                                   ? const Color(0xFF07111F)
                                                   : Colors.white70,
                                             ),
@@ -1163,7 +1163,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                                     style: TextStyle(
                                                       fontWeight:
                                                           FontWeight.w600,
-                                                      color: isSelected
+                                                      color: (isSelected || hasFocus)
                                                           ? const Color(
                                                               0xFF07111F)
                                                           : Colors.white,
@@ -1173,7 +1173,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                                     '${list.sourceType.label} • ${list.entries.length} link',
                                                     style: TextStyle(
                                                       fontSize: 11,
-                                                      color: isSelected
+                                                      color: (isSelected || hasFocus)
                                                           ? const Color(
                                                                   0xFF07111F)
                                                               .withValues(
