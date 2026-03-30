@@ -3,6 +3,7 @@ package com.videob.vb_google
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
+import android.view.KeyEvent
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -380,11 +381,59 @@ class PlayerActivity : Activity() {
         """.trimIndent()
     }
 
-    override fun onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack()
-            return
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                webView.evaluateJavascript("""(function(){
+                  var v=document.querySelector('video');
+                  if(!v)return;
+                  if(v.paused)v.play();else v.pause();
+                  if(typeof showControls==='function')showControls();
+                })();""", null)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT,
+            KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                webView.evaluateJavascript("""(function(){
+                  var v=document.querySelector('video');
+                  if(!v)return;
+                  v.currentTime=Math.max(0,v.currentTime-10);
+                  if(typeof showSeekFeedback==='function')showSeekFeedback('-10s');
+                  if(typeof showControls==='function')showControls();
+                })();""", null)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                webView.evaluateJavascript("""(function(){
+                  var v=document.querySelector('video');
+                  if(!v)return;
+                  v.currentTime=Math.min(v.duration||0,v.currentTime+10);
+                  if(typeof showSeekFeedback==='function')showSeekFeedback('+10s');
+                  if(typeof showControls==='function')showControls();
+                })();""", null)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                webView.evaluateJavascript(
+                    "if(typeof showControls==='function')showControls();", null)
+                return true
+            }
+            KeyEvent.KEYCODE_BACK -> {
+                if (webView.canGoBack()) { webView.goBack(); return true }
+            }
         }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onBackPressed() {
         super.onBackPressed()
     }
 
