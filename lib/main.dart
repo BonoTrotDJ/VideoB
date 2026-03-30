@@ -555,135 +555,23 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Future<void> _showCreateListDialog() async {
-    var sourceType = _VideoListSourceType.manual;
-    var listName = '';
-    var sourceUrl = '';
-    final sourceUrlController = TextEditingController();
+    final result = await Navigator.of(context).push<_CreateListDialogResult>(
+      MaterialPageRoute<_CreateListDialogResult>(
+        builder: (BuildContext context) => const _CreateListPage(),
+        fullscreenDialog: true,
+      ),
+    );
 
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context,
-              void Function(void Function()) setModalState) {
-            return AlertDialog(
-              title: const Text('Nuova Lista'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    TextFormField(
-                      decoration: const InputDecoration(
-                        labelText: 'Nome lista',
-                        hintText: 'Es. Calcio, Film, Sport',
-                      ),
-                      onChanged: (String value) {
-                        listName = value;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    SegmentedButton<_VideoListSourceType>(
-                      segments: const <ButtonSegment<_VideoListSourceType>>[
-                        ButtonSegment<_VideoListSourceType>(
-                          value: _VideoListSourceType.manual,
-                          label: Text('Manuale'),
-                          icon: Icon(Icons.edit_note_rounded),
-                        ),
-                        ButtonSegment<_VideoListSourceType>(
-                          value: _VideoListSourceType.imported,
-                          label: Text('Da URL'),
-                          icon: Icon(Icons.cloud_download_rounded),
-                        ),
-                      ],
-                      selected: <_VideoListSourceType>{sourceType},
-                      onSelectionChanged: (Set<_VideoListSourceType> value) {
-                        setModalState(() {
-                          sourceType = value.first;
-                        });
-                      },
-                    ),
-                    if (sourceType ==
-                        _VideoListSourceType.imported) ...<Widget>[
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: sourceUrlController,
-                        decoration: const InputDecoration(
-                          labelText: 'URL da importare',
-                          hintText: 'https://...',
-                          suffixIcon: Icon(Icons.content_paste_rounded),
-                        ),
-                        onChanged: (String value) {
-                          sourceUrl = value;
-                        },
-                        onTapOutside: (_) {
-                          FocusManager.instance.primaryFocus?.unfocus();
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: FilledButton.tonalIcon(
-                          onPressed: () async {
-                            final clipboardData = await Clipboard.getData(
-                              Clipboard.kTextPlain,
-                            );
-                            final pastedText =
-                                clipboardData?.text?.trim() ?? '';
-                            if (pastedText.isEmpty) {
-                              return;
-                            }
+    if (result == null) {
+      return;
+    }
 
-                            setModalState(() {
-                              sourceUrl = pastedText;
-                              sourceUrlController.text = pastedText;
-                              sourceUrlController.selection =
-                                  TextSelection.collapsed(
-                                offset: pastedText.length,
-                              );
-                            });
-                          },
-                          icon: const Icon(Icons.content_paste_go_rounded),
-                          label: const Text('Incolla'),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Annulla'),
-                ),
-                FilledButton(
-                  onPressed: () async {
-                    final name = listName.trim();
-                    final importUrl = sourceUrl.trim();
-
-                    if (name.isEmpty) {
-                      return;
-                    }
-                    if (sourceType == _VideoListSourceType.imported &&
-                        importUrl.isEmpty) {
-                      return;
-                    }
-
-                    Navigator.of(context).pop();
-                    await _createList(
-                      name: name,
-                      sourceType: sourceType,
-                      sourceUrl: sourceType == _VideoListSourceType.imported
-                          ? importUrl
-                          : null,
-                    );
-                  },
-                  child: const Text('Crea'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    await _createList(
+      name: result.name,
+      sourceType: result.sourceType,
+      sourceUrl: result.sourceType == _VideoListSourceType.imported
+          ? result.sourceUrl
+          : null,
     );
   }
 
@@ -1500,6 +1388,226 @@ class _BackupPayload {
 
   final String rawLists;
   final String? selectedListId;
+}
+
+class _CreateListDialogResult {
+  const _CreateListDialogResult({
+    required this.name,
+    required this.sourceType,
+    required this.sourceUrl,
+  });
+
+  final String name;
+  final _VideoListSourceType sourceType;
+  final String sourceUrl;
+}
+
+class _CreateListPage extends StatefulWidget {
+  const _CreateListPage();
+
+  @override
+  State<_CreateListPage> createState() => _CreateListPageState();
+}
+
+class _CreateListPageState extends State<_CreateListPage> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _sourceUrlController = TextEditingController();
+  final FocusNode _nameFocusNode = FocusNode();
+  final FocusNode _sourceUrlFocusNode = FocusNode();
+  _VideoListSourceType _sourceType = _VideoListSourceType.manual;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _nameFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _sourceUrlController.dispose();
+    _nameFocusNode.dispose();
+    _sourceUrlFocusNode.dispose();
+    super.dispose();
+  }
+
+  void _focusNode(FocusNode focusNode) {
+    if (!mounted) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      focusNode.requestFocus();
+    });
+  }
+
+  Future<void> _pasteUrl() async {
+    final clipboardData = await Clipboard.getData(Clipboard.kTextPlain);
+    final pastedText = clipboardData?.text?.trim() ?? '';
+    if (pastedText.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _sourceUrlController.text = pastedText;
+      _sourceUrlController.selection = TextSelection.collapsed(
+        offset: pastedText.length,
+      );
+    });
+  }
+
+  void _submit() {
+    final name = _nameController.text.trim();
+    final sourceUrl = _sourceUrlController.text.trim();
+    if (name.isEmpty) {
+      return;
+    }
+    if (_sourceType == _VideoListSourceType.imported && sourceUrl.isEmpty) {
+      return;
+    }
+
+    Navigator.of(context).pop(
+      _CreateListDialogResult(
+        name: name,
+        sourceType: _sourceType,
+        sourceUrl: sourceUrl,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final viewInsets = MediaQuery.of(context).viewInsets;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Nuova Lista'),
+      ),
+      body: AnimatedPadding(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(bottom: viewInsets.bottom),
+        child: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+            children: <Widget>[
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 840),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          'Crea una nuova lista manuale o importata da URL.',
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                        const SizedBox(height: 20),
+                        TextField(
+                          controller: _nameController,
+                          focusNode: _nameFocusNode,
+                          autofocus: true,
+                          onTap: () => _focusNode(_nameFocusNode),
+                          textInputAction: TextInputAction.next,
+                          onSubmitted: (_) {
+                            if (_sourceType == _VideoListSourceType.imported) {
+                              _focusNode(_sourceUrlFocusNode);
+                              return;
+                            }
+                            _submit();
+                          },
+                          decoration: const InputDecoration(
+                            labelText: 'Nome lista',
+                            hintText: 'Es. Calcio, Film, Sport',
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        SegmentedButton<_VideoListSourceType>(
+                          segments: const <ButtonSegment<_VideoListSourceType>>[
+                            ButtonSegment<_VideoListSourceType>(
+                              value: _VideoListSourceType.manual,
+                              label: Text('Manuale'),
+                              icon: Icon(Icons.edit_note_rounded),
+                            ),
+                            ButtonSegment<_VideoListSourceType>(
+                              value: _VideoListSourceType.imported,
+                              label: Text('Da URL'),
+                              icon: Icon(Icons.cloud_download_rounded),
+                            ),
+                          ],
+                          selected: <_VideoListSourceType>{_sourceType},
+                          onSelectionChanged:
+                              (Set<_VideoListSourceType> value) {
+                            setState(() {
+                              _sourceType = value.first;
+                            });
+                            if (value.first == _VideoListSourceType.imported) {
+                              _focusNode(_sourceUrlFocusNode);
+                            } else {
+                              _focusNode(_nameFocusNode);
+                            }
+                          },
+                        ),
+                        if (_sourceType ==
+                            _VideoListSourceType.imported) ...<Widget>[
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _sourceUrlController,
+                            focusNode: _sourceUrlFocusNode,
+                            textInputAction: TextInputAction.done,
+                            onTap: () => _focusNode(_sourceUrlFocusNode),
+                            onSubmitted: (_) => _submit(),
+                            decoration: const InputDecoration(
+                              labelText: 'URL da importare',
+                              hintText: 'https://...',
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: FilledButton.tonalIcon(
+                              onPressed: _pasteUrl,
+                              icon: const Icon(Icons.content_paste_go_rounded),
+                              label: const Text('Incolla'),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 18),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: <Widget>[
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('Annulla'),
+                            ),
+                            const SizedBox(width: 12),
+                            FilledButton(
+                              onPressed: _submit,
+                              child: const Text('Crea'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _VideoList {
