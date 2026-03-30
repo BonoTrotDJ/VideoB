@@ -325,6 +325,65 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _persistLists();
   }
 
+  Future<void> _openEntryWithChannelPicker(_VideoEntry entry) async {
+    final channels = entry.channels.isNotEmpty
+        ? entry.channels
+        : entry.url.isNotEmpty
+            ? [_VideoChannel(url: entry.url, label: 'Canale', language: entry.language ?? '')]
+            : <_VideoChannel>[];
+
+    if (channels.isEmpty) return;
+
+    if (channels.length == 1) {
+      await _openUrl(channels.first.url, entryId: entry.id, entryName: entry.name);
+      return;
+    }
+
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(entry.name),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              'Scegli la lingua:',
+              style: const TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            ...List<Widget>.generate(channels.length, (int i) {
+              final ch = channels[i];
+              return ListTile(
+                autofocus: i == 0,
+                leading: const Icon(Icons.play_circle_outline_rounded),
+                title: Text(ch.language.isNotEmpty ? ch.language : ch.label),
+                subtitle: ch.language.isNotEmpty && ch.label.isNotEmpty
+                    ? Text(ch.label, style: const TextStyle(fontSize: 11))
+                    : null,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _openUrl(ch.url, entryId: entry.id, entryName: entry.name);
+                },
+              );
+            }),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Annulla'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openUrl(
     String url, {
     String? entryId,
@@ -1536,8 +1595,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         : Colors.white.withValues(alpha: 0.10);
     final channels =
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
-    final primaryUrl =
-        channels.isNotEmpty ? channels.first.url : entry.url;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -1552,8 +1609,18 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             }
           });
         },
+        onKeyEvent: (FocusNode node, KeyEvent event) {
+          if (event is KeyDownEvent &&
+              (event.logicalKey == LogicalKeyboardKey.enter ||
+               event.logicalKey == LogicalKeyboardKey.select ||
+               event.logicalKey == LogicalKeyboardKey.gameButtonA)) {
+            _openEntryWithChannelPicker(entry);
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
         child: GestureDetector(
-          onTap: () => _openUrl(primaryUrl, entryId: entry.id, entryName: entry.name),
+          onTap: () => _openEntryWithChannelPicker(entry),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             decoration: BoxDecoration(
