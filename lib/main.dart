@@ -763,6 +763,32 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     );
   }
 
+  Future<void> _confirmDeleteList(_VideoList list) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: const Text('Elimina lista'),
+        content: Text(
+            'Vuoi eliminare la lista "${list.name}"? L\'operazione non può essere annullata.'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Annulla'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Elimina'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deleteList(list);
+    }
+  }
+
   Future<void> _deleteList(_VideoList list) async {
     if (_videoLists.length == 1) {
       setState(() {
@@ -1081,28 +1107,125 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   itemBuilder: (BuildContext context, int index) {
                     final list = _videoLists[index];
                     final isSelected = list.id == _selectedListId;
-                    return ListTile(
-                      selected: isSelected,
-                      selectedTileColor: Colors.white,
-                      selectedColor: const Color(0xFF07111F),
-                      leading: Icon(
-                        list.sourceType == _VideoListSourceType.manual
-                            ? Icons.edit_note_rounded
-                            : Icons.cloud_download_rounded,
+                    final accent = const Color(0xFFF4B942);
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Focus(
+                              child: Builder(
+                                builder: (BuildContext ctx) {
+                                  final hasFocus = Focus.of(ctx).hasFocus;
+                                  return AnimatedContainer(
+                                    duration: const Duration(milliseconds: 150),
+                                    decoration: BoxDecoration(
+                                      color: isSelected
+                                          ? accent
+                                          : hasFocus
+                                              ? const Color(0xFFFF4444).withValues(alpha: 0.25)
+                                              : Colors.white
+                                                  .withValues(alpha: 0.06),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(14),
+                                      onTap: () {
+                                        Navigator.of(context).pop();
+                                        _selectList(list.id);
+                                      },
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 14, vertical: 10),
+                                        child: Row(
+                                          children: <Widget>[
+                                            Icon(
+                                              list.sourceType ==
+                                                      _VideoListSourceType
+                                                          .manual
+                                                  ? Icons.edit_note_rounded
+                                                  : Icons
+                                                      .cloud_download_rounded,
+                                              size: 18,
+                                              color: isSelected
+                                                  ? const Color(0xFF07111F)
+                                                  : Colors.white70,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: <Widget>[
+                                                  Text(
+                                                    list.name,
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                      color: isSelected
+                                                          ? const Color(
+                                                              0xFF07111F)
+                                                          : Colors.white,
+                                                    ),
+                                                  ),
+                                                  Text(
+                                                    '${list.sourceType.label} • ${list.entries.length} link',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: isSelected
+                                                          ? const Color(
+                                                                  0xFF07111F)
+                                                              .withValues(
+                                                                  alpha: 0.7)
+                                                          : Colors.white54,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Focus(
+                            child: Builder(
+                              builder: (BuildContext ctx) {
+                                final hasFocus = Focus.of(ctx).hasFocus;
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  decoration: BoxDecoration(
+                                    color: hasFocus
+                                        ? const Color(0xFFFF4444).withValues(alpha: 0.25)
+                                        : Colors.white.withValues(alpha: 0.06),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: () => _confirmDeleteList(list),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(10),
+                                      child: Icon(
+                                        Icons.delete_outline_rounded,
+                                        size: 18,
+                                        color: hasFocus
+                                            ? const Color(0xFFFF4444)
+                                            : Colors.white54,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                      title: Text(list.name),
-                      subtitle: Text(
-                        '${list.sourceType.label} • ${list.entries.length} link',
-                      ),
-                      trailing: IconButton(
-                        tooltip: 'Elimina lista',
-                        onPressed: () => _deleteList(list),
-                        icon: const Icon(Icons.delete_outline_rounded),
-                      ),
-                      onTap: () {
-                        Navigator.of(context).pop();
-                        _selectList(list.id);
-                      },
                     );
                   },
                 ),
