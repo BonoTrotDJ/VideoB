@@ -1,11 +1,17 @@
 package com.videob.vb_google
 
+import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
+import android.text.InputType
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.TypedValue
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -104,9 +110,85 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "editText" -> {
+                    val title = call.argument<String>("title").orEmpty()
+                    val initialValue = call.argument<String>("initialValue").orEmpty()
+                    val hint = call.argument<String>("hint").orEmpty()
+                    val isUrl = call.argument<Boolean>("isUrl") == true
+
+                    runOnUiThread {
+                        showSystemTextEditor(
+                            title = title,
+                            initialValue = initialValue,
+                            hint = hint,
+                            isUrl = isUrl,
+                            onSubmit = { value -> result.success(value) },
+                            onCancel = { result.success(null) },
+                        )
+                    }
+                }
+
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun showSystemTextEditor(
+        title: String,
+        initialValue: String,
+        hint: String,
+        isUrl: Boolean,
+        onSubmit: (String) -> Unit,
+        onCancel: () -> Unit,
+    ) {
+        val editText = EditText(this).apply {
+            setText(initialValue)
+            setSelection(text.length)
+            this.hint = hint
+            maxLines = 3
+            isSingleLine = false
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            val horizontalPadding = (20 * resources.displayMetrics.density).toInt()
+            val verticalPadding = (16 * resources.displayMetrics.density).toInt()
+            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            inputType = if (isUrl) {
+                InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_VARIATION_URI or
+                    InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            } else {
+                InputType.TYPE_CLASS_TEXT or
+                    InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
+                    InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            }
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(editText)
+            .setPositiveButton("Conferma") { dialogInterface, _ ->
+                onSubmit(editText.text?.toString().orEmpty())
+                dialogInterface.dismiss()
+            }
+            .setNegativeButton("Annulla") { dialogInterface, _ ->
+                onCancel()
+                dialogInterface.dismiss()
+            }
+            .setOnCancelListener {
+                onCancel()
+            }
+            .create()
+
+        dialog.setOnShowListener {
+            editText.requestFocus()
+            dialog.window?.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE,
+            )
+            val imm = getSystemService(InputMethodManager::class.java)
+            imm?.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
+        }
+
+        dialog.show()
     }
 
     private fun writeBackupPayload(payload: String) {

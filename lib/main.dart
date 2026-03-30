@@ -119,6 +119,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   String? _editingEntryId;
   String? _activeEntryId;
   String? _activeEntryName;
+  String? _focusedEntryId;
   bool _isLoading = true;
   bool _isBusy = false;
   String? _status;
@@ -917,6 +918,41 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     });
   }
 
+  Future<void> _editWithSystemEditor({
+    required TextEditingController controller,
+    required String title,
+    required String hint,
+    bool isUrl = false,
+  }) async {
+    try {
+      final value = await _channel.invokeMethod<String>(
+        'editText',
+        <String, dynamic>{
+          'title': title,
+          'initialValue': controller.text,
+          'hint': hint,
+          'isUrl': isUrl,
+        },
+      );
+
+      if (value == null || !mounted) {
+        return;
+      }
+
+      setState(() {
+        controller.text = value;
+        controller.selection = TextSelection.collapsed(offset: value.length);
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = error.message ?? 'Impossibile aprire l\'editor di sistema.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -957,7 +993,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      value: _availableSports.contains(_selectedSportFilter)
+                      initialValue: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
                       decoration: const InputDecoration(
@@ -1225,38 +1261,45 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        TextField(
-          controller: _entryNameController,
-          decoration: const InputDecoration(
-            labelText: 'Nome voce',
-            hintText: 'Es. Sky Sport 1',
+        _SystemEditorField(
+          labelText: 'Nome voce',
+          hintText: 'Es. Sky Sport 1',
+          value: _entryNameController.text,
+          onTap: () => _editWithSystemEditor(
+            controller: _entryNameController,
+            title: 'Nome voce',
+            hint: 'Es. Sky Sport 1',
           ),
         ),
         const SizedBox(height: 14),
-        TextField(
-          controller: _entryUrlController,
-          decoration: InputDecoration(
-            labelText: 'URL video',
-            hintText: 'https://...',
-            suffixIcon: IconButton(
-              tooltip: 'Incolla',
-              onPressed: () async {
-                final clipboardData = await Clipboard.getData(
-                  Clipboard.kTextPlain,
-                );
-                final pastedText = clipboardData?.text?.trim() ?? '';
-                if (pastedText.isEmpty) {
-                  return;
-                }
+        _SystemEditorField(
+          labelText: 'URL video',
+          hintText: 'https://...',
+          value: _entryUrlController.text,
+          onTap: () => _editWithSystemEditor(
+            controller: _entryUrlController,
+            title: 'URL video',
+            hint: 'https://...',
+            isUrl: true,
+          ),
+          trailing: IconButton(
+            tooltip: 'Incolla',
+            onPressed: () async {
+              final clipboardData = await Clipboard.getData(
+                Clipboard.kTextPlain,
+              );
+              final pastedText = clipboardData?.text?.trim() ?? '';
+              if (pastedText.isEmpty) {
+                return;
+              }
 
-                _entryUrlController.text = pastedText;
-                _entryUrlController.selection = TextSelection.collapsed(
-                  offset: pastedText.length,
-                );
-                setState(() {});
-              },
-              icon: const Icon(Icons.content_paste_go_rounded),
-            ),
+              _entryUrlController.text = pastedText;
+              _entryUrlController.selection = TextSelection.collapsed(
+                offset: pastedText.length,
+              );
+              setState(() {});
+            },
+            icon: const Icon(Icons.content_paste_go_rounded),
           ),
         ),
         const SizedBox(height: 18),
@@ -1317,83 +1360,137 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Widget _buildEntryTile(_VideoList list, _VideoEntry entry) {
     final sportBackground = _sportBackground(entry.sportLabel);
-    final isActive = _activeEntryId == entry.id;
+    final isSelected =
+        _focusedEntryId == entry.id || _activeEntryId == entry.id;
+    final tileColor = isSelected ? Colors.white : sportBackground;
+    final primaryTextColor =
+        isSelected ? const Color(0xFF07111F) : Colors.white;
+    final secondaryTextColor = isSelected
+        ? const Color(0xFF07111F).withValues(alpha: 0.82)
+        : Colors.white70;
+    final borderColor = isSelected
+        ? Colors.white
+        : Colors.white.withValues(alpha: 0.08);
+    final chipBackground = isSelected
+        ? const Color(0xFF07111F)
+        : Colors.white.withValues(alpha: 0.10);
+    final chipTextColor = isSelected ? Colors.white : primaryTextColor;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        onTap: () => _openUrl(
-          entry.url,
-          entryId: entry.id,
-          entryName: entry.name,
-        ),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(
-            color: isActive
-                ? const Color(0xFFF4B942)
-                : Colors.white.withValues(alpha: 0.08),
-            width: isActive ? 2 : 1,
+      child: Focus(
+        onFocusChange: (bool hasFocus) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            if (hasFocus) {
+              _focusedEntryId = entry.id;
+            } else if (_focusedEntryId == entry.id) {
+              _focusedEntryId = null;
+            }
+          });
+        },
+        child: ListTile(
+          autofocus: _focusedEntryId == null && _activeEntryId == entry.id,
+          onTap: () => _openUrl(
+            entry.url,
+            entryId: entry.id,
+            entryName: entry.name,
           ),
-        ),
-        tileColor: sportBackground,
-        title: Text(entry.name),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            if (entry.eventTime != null ||
-                entry.dayLabel != null ||
-                entry.language != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: <Widget>[
-                    if (entry.eventTime != null)
-                      Chip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(entry.eventTime!),
-                      ),
-                    if (entry.language != null)
-                      Chip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(entry.language!),
-                      ),
-                    if (entry.sportLabel != null)
-                      Chip(
-                        visualDensity: VisualDensity.compact,
-                        avatar: Icon(
-                          _sportIcon(entry.sportLabel!),
-                          size: 16,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(
+              color: borderColor,
+              width: isSelected ? 2 : 1,
+            ),
+          ),
+          tileColor: tileColor,
+          title: Text(
+            entry.name,
+            style: TextStyle(
+              color: primaryTextColor,
+              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            ),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (entry.eventTime != null ||
+                  entry.dayLabel != null ||
+                  entry.language != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: <Widget>[
+                      if (entry.eventTime != null)
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: chipBackground,
+                          side: BorderSide.none,
+                          label: Text(
+                            entry.eventTime!,
+                            style: TextStyle(color: chipTextColor),
+                          ),
                         ),
-                        label: Text(entry.sportLabel!),
-                      ),
-                  ],
+                      if (entry.language != null)
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: chipBackground,
+                          side: BorderSide.none,
+                          label: Text(
+                            entry.language!,
+                            style: TextStyle(color: chipTextColor),
+                          ),
+                        ),
+                      if (entry.sportLabel != null)
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: chipBackground,
+                          side: BorderSide.none,
+                          avatar: Icon(
+                            _sportIcon(entry.sportLabel!),
+                            size: 16,
+                            color: chipTextColor,
+                          ),
+                          label: Text(
+                            entry.sportLabel!,
+                            style: TextStyle(color: chipTextColor),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              Text(
+                entry.url,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: secondaryTextColor),
+              ),
+            ],
+          ),
+          leading: Icon(
+            entry.sportLabel == null
+                ? Icons.play_circle_outline_rounded
+                : _sportIcon(entry.sportLabel!),
+            color: primaryTextColor,
+          ),
+          trailing: Wrap(
+            spacing: 8,
+            children: <Widget>[
+              IconButton(
+                tooltip: 'Elimina',
+                onPressed: () => _deleteEntry(entry),
+                icon: Icon(
+                  Icons.delete_outline_rounded,
+                  color: primaryTextColor,
                 ),
               ),
-            Text(
-              entry.url,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-        leading: Icon(
-          entry.sportLabel == null
-              ? Icons.play_circle_outline_rounded
-              : _sportIcon(entry.sportLabel!),
-        ),
-        trailing: Wrap(
-          spacing: 8,
-          children: <Widget>[
-            IconButton(
-              tooltip: 'Elimina',
-              onPressed: () => _deleteEntry(entry),
-              icon: const Icon(Icons.delete_outline_rounded),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1605,40 +1702,40 @@ class _CreateListPage extends StatefulWidget {
 class _CreateListPageState extends State<_CreateListPage> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _sourceUrlController = TextEditingController();
-  final FocusNode _nameFocusNode = FocusNode();
-  final FocusNode _sourceUrlFocusNode = FocusNode();
   _VideoListSourceType _sourceType = _VideoListSourceType.manual;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      _nameFocusNode.requestFocus();
-    });
-  }
 
   @override
   void dispose() {
     _nameController.dispose();
     _sourceUrlController.dispose();
-    _nameFocusNode.dispose();
-    _sourceUrlFocusNode.dispose();
     super.dispose();
   }
 
-  void _focusNode(FocusNode focusNode) {
-    if (!mounted) {
+  Future<void> _editWithSystemEditor({
+    required TextEditingController controller,
+    required String title,
+    required String hint,
+    bool isUrl = false,
+  }) async {
+    const channel = MethodChannel('videob/channel');
+
+    final value = await channel.invokeMethod<String>(
+      'editText',
+      <String, dynamic>{
+        'title': title,
+        'initialValue': controller.text,
+        'hint': hint,
+        'isUrl': isUrl,
+      },
+    );
+
+    if (value == null || !mounted) {
       return;
     }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      focusNode.requestFocus();
+    setState(() {
+      controller.text = value;
+      controller.selection = TextSelection.collapsed(offset: value.length);
     });
   }
 
@@ -1706,22 +1803,14 @@ class _CreateListPageState extends State<_CreateListPage> {
                           style: theme.textTheme.bodyLarge,
                         ),
                         const SizedBox(height: 20),
-                        TextField(
-                          controller: _nameController,
-                          focusNode: _nameFocusNode,
-                          autofocus: true,
-                          onTap: () => _focusNode(_nameFocusNode),
-                          textInputAction: TextInputAction.next,
-                          onSubmitted: (_) {
-                            if (_sourceType == _VideoListSourceType.imported) {
-                              _focusNode(_sourceUrlFocusNode);
-                              return;
-                            }
-                            _submit();
-                          },
-                          decoration: const InputDecoration(
-                            labelText: 'Nome lista',
-                            hintText: 'Es. Calcio, Film, Sport',
+                        _SystemEditorField(
+                          labelText: 'Nome lista',
+                          hintText: 'Es. Calcio, Film, Sport',
+                          value: _nameController.text,
+                          onTap: () => _editWithSystemEditor(
+                            controller: _nameController,
+                            title: 'Nome lista',
+                            hint: 'Es. Calcio, Film, Sport',
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -1744,25 +1833,20 @@ class _CreateListPageState extends State<_CreateListPage> {
                             setState(() {
                               _sourceType = value.first;
                             });
-                            if (value.first == _VideoListSourceType.imported) {
-                              _focusNode(_sourceUrlFocusNode);
-                            } else {
-                              _focusNode(_nameFocusNode);
-                            }
                           },
                         ),
                         if (_sourceType ==
                             _VideoListSourceType.imported) ...<Widget>[
                           const SizedBox(height: 16),
-                          TextField(
-                            controller: _sourceUrlController,
-                            focusNode: _sourceUrlFocusNode,
-                            textInputAction: TextInputAction.done,
-                            onTap: () => _focusNode(_sourceUrlFocusNode),
-                            onSubmitted: (_) => _submit(),
-                            decoration: const InputDecoration(
-                              labelText: 'URL da importare',
-                              hintText: 'https://...',
+                          _SystemEditorField(
+                            labelText: 'URL da importare',
+                            hintText: 'https://...',
+                            value: _sourceUrlController.text,
+                            onTap: () => _editWithSystemEditor(
+                              controller: _sourceUrlController,
+                              title: 'URL da importare',
+                              hint: 'https://...',
+                              isUrl: true,
                             ),
                           ),
                           const SizedBox(height: 10),
@@ -1868,6 +1952,48 @@ class _VideoList {
           .whereType<Map<String, dynamic>>()
           .map(_VideoEntry.fromJson)
           .toList(),
+    );
+  }
+}
+
+class _SystemEditorField extends StatelessWidget {
+  const _SystemEditorField({
+    required this.labelText,
+    required this.hintText,
+    required this.value,
+    required this.onTap,
+    this.trailing,
+  });
+
+  final String labelText;
+  final String hintText;
+  final String value;
+  final VoidCallback onTap;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasValue = value.trim().isNotEmpty;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: InputDecorator(
+        isFocused: false,
+        isEmpty: !hasValue,
+        decoration: InputDecoration(
+          labelText: labelText,
+          suffixIcon: trailing ?? const Icon(Icons.edit_rounded),
+        ),
+        child: Text(
+          hasValue ? value : hintText,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: hasValue ? Colors.white : Colors.white54,
+          ),
+        ),
+      ),
     );
   }
 }
