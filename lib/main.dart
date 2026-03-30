@@ -112,6 +112,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   final TextEditingController _entryNameController = TextEditingController();
   final TextEditingController _entryUrlController = TextEditingController();
+  final ScrollController _mainScrollController = ScrollController();
 
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
@@ -195,6 +196,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   void dispose() {
     _entryNameController.dispose();
     _entryUrlController.dispose();
+    _mainScrollController.dispose();
     super.dispose();
   }
 
@@ -419,6 +421,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           dayLabel: events[i].dayLabel,
           language: events[i].languageLabel,
           sportLabel: events[i].sportLabel,
+          channels: events[i].channels,
         ),
     ];
   }
@@ -470,13 +473,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           title: title,
           eventTime: time,
           sportLabel: _detectSportFromName(title),
-          primaryUrl: url,
           dayLabel: currentDayLabel,
         );
         orderedKeys.add(key);
       }
 
-      grouped[key]!.addLanguage(language);
+      grouped[key]!.addChannel(url, _channelLabel(url), language);
     }
 
     final results = <_ImportedScheduleEvent>[];
@@ -498,11 +500,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       results.add(
         _ImportedScheduleEvent(
           title: event.title,
-          url: event.primaryUrl,
+          url: event.primaryUrl ?? '',
           eventTime: event.eventTime,
           dayLabel: event.dayLabel ?? _weekdayLabels[dayIndex],
           languageLabel: event.languageLabel,
           sportLabel: event.sportLabel,
+          channels: List<_VideoChannel>.unmodifiable(event.channels),
         ),
       );
       previousTime = event.eventTime;
@@ -613,6 +616,23 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     return null;
+  }
+
+  String _channelLabel(String url) {
+    final uri = Uri.tryParse(url);
+    if (uri == null) {
+      return 'Canale';
+    }
+    final segments =
+        uri.pathSegments.where((String s) => s.isNotEmpty).toList();
+    if (segments.isEmpty) {
+      return 'Canale';
+    }
+    final tail =
+        segments.length >= 2 ? segments.sublist(segments.length - 2) : segments;
+    return tail
+        .map((String s) => s.replaceAll('.php', '').toUpperCase())
+        .join(' / ');
   }
 
   String? _extractLanguageFromUrl(String url) {
@@ -988,12 +1008,32 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     const SizedBox(height: 16),
                     FilledButton.icon(
                       onPressed: _showCreateListDialog,
+                      style: ButtonStyle(
+                        backgroundColor:
+                            WidgetStateProperty.resolveWith<Color?>(
+                          (Set<WidgetState> states) {
+                            if (states.contains(WidgetState.focused)) {
+                              return Colors.white;
+                            }
+                            return null;
+                          },
+                        ),
+                        foregroundColor:
+                            WidgetStateProperty.resolveWith<Color?>(
+                          (Set<WidgetState> states) {
+                            if (states.contains(WidgetState.focused)) {
+                              return const Color(0xFF07111F);
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
                       icon: const Icon(Icons.add_rounded),
                       label: const Text('Nuova Lista'),
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      initialValue: _availableSports.contains(_selectedSportFilter)
+                      value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
                       decoration: const InputDecoration(
@@ -1118,8 +1158,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         child: const Text('Crea La Prima Lista'),
                       ),
                     )
-                  : ListView(
-                      padding: const EdgeInsets.all(24),
+                  : Scrollbar(
+                      controller: _mainScrollController,
+                      thumbVisibility: true,
+                      trackVisibility: true,
+                      child: ListView(
+                      controller: _mainScrollController,
+                      padding: const EdgeInsets.only(left: 24, right: 40, top: 24, bottom: 24),
                       children: <Widget>[
                         _SectionCard(
                           title: selectedList.name,
@@ -1229,6 +1274,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         ),
                       ],
                     ),
+                  ),
         ),
       ),
     );
@@ -1359,30 +1405,22 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Widget _buildEntryTile(_VideoList list, _VideoEntry entry) {
-    final sportBackground = _sportBackground(entry.sportLabel);
-    final isSelected =
+    final sportBg = _sportBackground(entry.sportLabel);
+    final isFocused =
         _focusedEntryId == entry.id || _activeEntryId == entry.id;
-    final tileColor = isSelected ? Colors.white : sportBackground;
-    final primaryTextColor =
-        isSelected ? const Color(0xFF07111F) : Colors.white;
-    final secondaryTextColor = isSelected
-        ? const Color(0xFF07111F).withValues(alpha: 0.82)
-        : Colors.white70;
-    final borderColor = isSelected
+    final borderColor = isFocused
         ? Colors.white
-        : Colors.white.withValues(alpha: 0.08);
-    final chipBackground = isSelected
-        ? const Color(0xFF07111F)
         : Colors.white.withValues(alpha: 0.10);
-    final chipTextColor = isSelected ? Colors.white : primaryTextColor;
+    final channels =
+        entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
+    final primaryUrl =
+        channels.isNotEmpty ? channels.first.url : entry.url;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 14),
       child: Focus(
         onFocusChange: (bool hasFocus) {
-          if (!mounted) {
-            return;
-          }
+          if (!mounted) return;
           setState(() {
             if (hasFocus) {
               _focusedEntryId = entry.id;
@@ -1391,105 +1429,126 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             }
           });
         },
-        child: ListTile(
-          autofocus: _focusedEntryId == null && _activeEntryId == entry.id,
-          onTap: () => _openUrl(
-            entry.url,
-            entryId: entry.id,
-            entryName: entry.name,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: BorderSide(
-              color: borderColor,
-              width: isSelected ? 2 : 1,
+        child: GestureDetector(
+          onTap: () => _openUrl(primaryUrl, entryId: entry.id, entryName: entry.name),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            decoration: BoxDecoration(
+              color: sportBg,
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: borderColor,
+                width: isFocused ? 2 : 1,
+              ),
             ),
-          ),
-          tileColor: tileColor,
-          title: Text(
-            entry.name,
-            style: TextStyle(
-              color: primaryTextColor,
-              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-            ),
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (entry.eventTime != null ||
-                  entry.dayLabel != null ||
-                  entry.language != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: <Widget>[
-                      if (entry.eventTime != null)
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          backgroundColor: chipBackground,
-                          side: BorderSide.none,
-                          label: Text(
-                            entry.eventTime!,
-                            style: TextStyle(color: chipTextColor),
-                          ),
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                // Time + sport row
+                Row(
+                  children: <Widget>[
+                    if (entry.eventTime != null) ...<Widget>[
+                      Text(
+                        entry.eventTime!,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -1,
+                          color: Colors.white,
                         ),
-                      if (entry.language != null)
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          backgroundColor: chipBackground,
-                          side: BorderSide.none,
-                          label: Text(
-                            entry.language!,
-                            style: TextStyle(color: chipTextColor),
-                          ),
-                        ),
-                      if (entry.sportLabel != null)
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          backgroundColor: chipBackground,
-                          side: BorderSide.none,
-                          avatar: Icon(
-                            _sportIcon(entry.sportLabel!),
-                            size: 16,
-                            color: chipTextColor,
-                          ),
-                          label: Text(
-                            entry.sportLabel!,
-                            style: TextStyle(color: chipTextColor),
-                          ),
-                        ),
+                      ),
+                      const SizedBox(width: 14),
                     ],
+                    if (entry.sportLabel != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(
+                              _sportIcon(entry.sportLabel!),
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              entry.sportLabel!,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const Spacer(),
+                    if (list.sourceType == _VideoListSourceType.manual)
+                      IconButton(
+                        tooltip: 'Elimina',
+                        onPressed: () => _deleteEntry(entry),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          color: Colors.white54,
+                          size: 20,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // Title
+                Text(
+                  entry.name,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    height: 1.25,
                   ),
                 ),
-              Text(
-                entry.url,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: secondaryTextColor),
-              ),
-            ],
-          ),
-          leading: Icon(
-            entry.sportLabel == null
-                ? Icons.play_circle_outline_rounded
-                : _sportIcon(entry.sportLabel!),
-            color: primaryTextColor,
-          ),
-          trailing: Wrap(
-            spacing: 8,
-            children: <Widget>[
-              IconButton(
-                tooltip: 'Elimina',
-                onPressed: () => _deleteEntry(entry),
-                icon: Icon(
-                  Icons.delete_outline_rounded,
-                  color: primaryTextColor,
-                ),
-              ),
-            ],
+                // Language
+                if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Lingue: ${entry.language}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.white.withValues(alpha: 0.65),
+                    ),
+                  ),
+                ],
+                // Channels
+                if (channels.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: channels.map((_VideoChannel ch) {
+                      return _ChannelButton(
+                        label: '${ch.label} • ${ch.language}',
+                        onTap: () => _openUrl(
+                          ch.url,
+                          entryId: entry.id,
+                          entryName: entry.name,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ] else if (entry.url.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 12),
+                  _ChannelButton(
+                    label: entry.url,
+                    onTap: () => _openUrl(entry.url,
+                        entryId: entry.id, entryName: entry.name),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),
@@ -1576,6 +1635,34 @@ enum _VideoListSourceType {
   final String label;
 }
 
+class _VideoChannel {
+  const _VideoChannel({
+    required this.url,
+    required this.label,
+    required this.language,
+  });
+
+  final String url;
+  final String label;
+  final String language;
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'url': url,
+      'label': label,
+      'language': language,
+    };
+  }
+
+  factory _VideoChannel.fromJson(Map<String, dynamic> json) {
+    return _VideoChannel(
+      url: json['url'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      language: json['language'] as String? ?? '',
+    );
+  }
+}
+
 class _VideoEntry {
   const _VideoEntry({
     required this.id,
@@ -1585,6 +1672,7 @@ class _VideoEntry {
     this.dayLabel,
     this.language,
     this.sportLabel,
+    this.channels = const <_VideoChannel>[],
   });
 
   final String id;
@@ -1594,6 +1682,7 @@ class _VideoEntry {
   final String? dayLabel;
   final String? language;
   final String? sportLabel;
+  final List<_VideoChannel> channels;
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -1604,10 +1693,13 @@ class _VideoEntry {
       'dayLabel': dayLabel,
       'language': language,
       'sportLabel': sportLabel,
+      'channels': channels.map((c) => c.toJson()).toList(),
     };
   }
 
   factory _VideoEntry.fromJson(Map<String, dynamic> json) {
+    final rawChannels =
+        json['channels'] as List<dynamic>? ?? const <dynamic>[];
     return _VideoEntry(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? '',
@@ -1616,6 +1708,10 @@ class _VideoEntry {
       dayLabel: json['dayLabel'] as String?,
       language: json['language'] as String?,
       sportLabel: json['sportLabel'] as String?,
+      channels: rawChannels
+          .whereType<Map<String, dynamic>>()
+          .map(_VideoChannel.fromJson)
+          .toList(),
     );
   }
 }
@@ -1625,23 +1721,25 @@ class _ImportedScheduleAccumulator {
     required this.title,
     required this.eventTime,
     required this.sportLabel,
-    required this.primaryUrl,
     required this.dayLabel,
   });
 
   final String title;
   final String eventTime;
   final String? sportLabel;
-  final String primaryUrl;
   final String? dayLabel;
+  final List<_VideoChannel> channels = <_VideoChannel>[];
   final Set<String> _languages = <String>{};
 
-  void addLanguage(String language) {
-    if (language.trim().isEmpty) {
-      return;
+  void addChannel(String url, String label, String language) {
+    channels.add(_VideoChannel(url: url, label: label, language: language));
+    if (language.trim().isNotEmpty &&
+        language != 'Lingua non indicata') {
+      _languages.add(language.trim());
     }
-    _languages.add(language.trim());
   }
+
+  String? get primaryUrl => channels.isNotEmpty ? channels.first.url : null;
 
   String get languageLabel {
     if (_languages.isEmpty) {
@@ -1660,6 +1758,7 @@ class _ImportedScheduleEvent {
     required this.dayLabel,
     required this.languageLabel,
     required this.sportLabel,
+    required this.channels,
   });
 
   final String title;
@@ -1668,6 +1767,7 @@ class _ImportedScheduleEvent {
   final String dayLabel;
   final String languageLabel;
   final String? sportLabel;
+  final List<_VideoChannel> channels;
 }
 
 class _BackupPayload {
@@ -1983,15 +2083,52 @@ class _SystemEditorField extends StatelessWidget {
         isEmpty: !hasValue,
         decoration: InputDecoration(
           labelText: labelText,
+          hintText: hasValue ? null : hintText,
+          hintStyle: const TextStyle(color: Colors.white38),
           suffixIcon: trailing ?? const Icon(Icons.edit_rounded),
         ),
-        child: Text(
-          hasValue ? value : hintText,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: hasValue ? Colors.white : Colors.white54,
-          ),
+        child: hasValue
+            ? Text(
+                value,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white),
+              )
+            : const SizedBox.shrink(),
+      ),
+    );
+  }
+}
+
+class _ChannelButton extends StatelessWidget {
+  const _ChannelButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFF050505),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(Icons.play_circle_outline_rounded,
+                size: 14, color: Colors.white70),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Colors.white),
+            ),
+          ],
         ),
       ),
     );

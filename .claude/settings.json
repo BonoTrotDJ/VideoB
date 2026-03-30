@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /var/www/html/vB_google -type f -name AndroidManifest.xml -o -type f -name build.gradle -o -type f -name *.kt -o -type f -name *.java)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter emulators:*)",
+      "Bash(flutter devices:*)",
+      "Bash(wait %1)",
+      "Bash(jobs)",
+      "Bash(flutter run:*)"
+    ]
+  }
+}
