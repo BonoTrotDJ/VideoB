@@ -21,6 +21,7 @@ class PlayerActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var statusView: TextView
     private lateinit var progressBar: ProgressBar
+    private lateinit var loadingOverlay: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,6 +30,7 @@ class PlayerActivity : Activity() {
         webView = findViewById(R.id.player_webview)
         statusView = findViewById(R.id.player_status)
         progressBar = findViewById(R.id.player_progress)
+        loadingOverlay = findViewById(R.id.player_loading_overlay)
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         if (url.isBlank()) {
@@ -96,8 +98,7 @@ class PlayerActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                progressBar.visibility = View.GONE
-                statusView.visibility = View.GONE
+                loadingOverlay.visibility = View.GONE
                 stripOverlays(view)
                 injectPlayerControls(view)
             }
@@ -105,6 +106,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun loadSource(url: String) {
+        loadingOverlay.visibility = View.VISIBLE
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
         statusView.text = "Caricamento..."
