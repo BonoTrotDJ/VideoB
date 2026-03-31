@@ -2,6 +2,12 @@
 
 Video BonoTrot e un lettore video per Android TV / Google TV che apre stream da liste URL importate oppure da liste create manualmente.
 
+## Download
+
+- Ultima release: `https://github.com/BonoTrotDJ/VideoB/releases/latest`
+- Release `v1.0.0`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.0`
+- APK `v1.0.0`: `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.0/app-release.apk`
+
 L'app permette di:
 
 - creare liste manuali con nome e URL
@@ -47,3 +53,7 @@ Avvio locale:
 flutter pub get
 flutter run
 ```
+
+## Release APK
+
+Quando pubblichi un tag Git come `v1.0.1`, GitHub Actions builda automaticamente la release Android e allega un APK alla GitHub Release corrispondente.
