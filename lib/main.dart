@@ -1477,8 +1477,23 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
         ),
       ),
-      body: FocusTraversalGroup(
-        policy: _MenuEdgeFocusPolicy(menuFocusNode: _menuFocusNode),
+      body: Focus(
+        canRequestFocus: false,
+        onKeyEvent: (FocusNode node, KeyEvent event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+            final currentFocus = FocusManager.instance.primaryFocus;
+            final box = currentFocus?.context?.findRenderObject() as RenderBox?;
+            if (box != null && box.hasSize) {
+              final pos = box.localToGlobal(Offset.zero);
+              if (pos.dx < 280) {
+                _menuFocusNode.requestFocus();
+                return KeyEventResult.handled;
+              }
+            }
+          }
+          return KeyEventResult.ignored;
+        },
         child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -2614,17 +2629,3 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-class _MenuEdgeFocusPolicy extends ReadingOrderTraversalPolicy {
-  _MenuEdgeFocusPolicy({required this.menuFocusNode});
-  final FocusNode menuFocusNode;
-
-  @override
-  FocusNode? findFirstFocusInDirection(
-      FocusNode currentNode, TraversalDirection direction) {
-    final result = super.findFirstFocusInDirection(currentNode, direction);
-    if (result == null && direction == TraversalDirection.left) {
-      return menuFocusNode;
-    }
-    return result;
-  }
-}
