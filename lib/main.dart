@@ -97,7 +97,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _channel = MethodChannel('videob/channel');
   static const _listsKey = 'video_lists_v2';
   static const _selectedListKey = 'selected_video_list_v2';
-  static const _preferredExternalPlayerKey = 'preferred_external_player_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
   static const _appVersion = '1.0.0+1';
@@ -118,7 +117,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
   String? _selectedSportFilter;
-  String? _preferredExternalPlayerPackage;
   String? _editingEntryId;
   String? _activeEntryId;
   String? _activeEntryName;
@@ -126,43 +124,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isLoading = true;
   bool _isBusy = false;
   String? _status;
-  List<_ExternalPlayerOption> _installedExternalPlayers =
-      const <_ExternalPlayerOption>[];
-
-  Future<List<_ExternalPlayerOption>> _getExternalPlayers(String mediaUrl) async {
-    final response = await _channel.invokeMethod<List<dynamic>>(
-      'getExternalPlayers',
-      <String, dynamic>{'url': mediaUrl},
-    );
-
-    return (response ?? <dynamic>[])
-        .whereType<Map<dynamic, dynamic>>()
-        .map(
-          (Map<dynamic, dynamic> item) => _ExternalPlayerOption(
-            label: item['label']?.toString() ?? 'Player esterno',
-            packageName: item['packageName']?.toString() ?? '',
-          ),
-        )
-        .where((_ExternalPlayerOption item) => item.packageName.isNotEmpty)
-        .toList();
-  }
-
-  Future<List<_ExternalPlayerOption>> _getInstalledExternalPlayers() async {
-    final response = await _channel.invokeMethod<List<dynamic>>(
-      'getInstalledExternalPlayers',
-    );
-
-    return (response ?? <dynamic>[])
-        .whereType<Map<dynamic, dynamic>>()
-        .map(
-          (Map<dynamic, dynamic> item) => _ExternalPlayerOption(
-            label: item['label']?.toString() ?? 'Player esterno',
-            packageName: item['packageName']?.toString() ?? '',
-          ),
-        )
-        .where((_ExternalPlayerOption item) => item.packageName.isNotEmpty)
-        .toList();
-  }
 
   _VideoList? get _selectedList {
     for (final list in _videoLists) {
@@ -243,8 +204,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final preferences = await SharedPreferences.getInstance();
     var rawLists = preferences.getString(_listsKey);
     var selectedListId = preferences.getString(_selectedListKey);
-    final preferredExternalPlayerPackage =
-        preferences.getString(_preferredExternalPlayerKey);
 
     if (rawLists == null || rawLists.isEmpty) {
       final backupPayload = await _loadBackupPayload();
@@ -289,12 +248,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     setState(() {
       _videoLists = parsedLists;
       _selectedListId = effectiveSelectedId;
-      _preferredExternalPlayerPackage = preferredExternalPlayerPackage;
       _isLoading = false;
     });
 
     await _persistLists();
-    await _loadInstalledExternalPlayers();
   }
 
   Future<void> _persistLists() async {
@@ -307,115 +264,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       await preferences.setString(_selectedListKey, _selectedListId!);
     }
     await _backupLists(payload, _selectedListId);
-  }
-
-  Future<void> _loadInstalledExternalPlayers() async {
-    try {
-      final players = await _getInstalledExternalPlayers();
-      if (!mounted) return;
-      setState(() {
-        _installedExternalPlayers = players;
-        if (_preferredExternalPlayerPackage != null &&
-            !players.any(
-              (_ExternalPlayerOption item) =>
-                  item.packageName == _preferredExternalPlayerPackage,
-            )) {
-          _preferredExternalPlayerPackage = null;
-        }
-      });
-    } on PlatformException {
-      if (!mounted) return;
-      setState(() {
-        _installedExternalPlayers = const <_ExternalPlayerOption>[];
-      });
-    }
-  }
-
-  Future<void> _setPreferredExternalPlayer(String? packageName) async {
-    final preferences = await SharedPreferences.getInstance();
-    if (packageName == null || packageName.isEmpty) {
-      await preferences.remove(_preferredExternalPlayerKey);
-    } else {
-      await preferences.setString(_preferredExternalPlayerKey, packageName);
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _preferredExternalPlayerPackage = packageName;
-      _status = packageName == null || packageName.isEmpty
-          ? 'Player esterno predefinito disattivato.'
-          : 'Player esterno predefinito aggiornato.';
-    });
-  }
-
-  Future<void> _showExternalPlayerSettings() async {
-    await _loadInstalledExternalPlayers();
-    if (!mounted) return;
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('Player esterno predefinito'),
-        content: SizedBox(
-          width: 560,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              ListTile(
-                autofocus: _preferredExternalPlayerPackage == null,
-                leading: const Icon(Icons.settings_backup_restore_rounded),
-                title: const Text('Chiedi ogni volta'),
-                subtitle: const Text('Mostra il menu di scelta del player.'),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  _setPreferredExternalPlayer(null);
-                },
-              ),
-              ..._installedExternalPlayers.map(
-                (_ExternalPlayerOption player) => Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: ListTile(
-                    autofocus:
-                        _preferredExternalPlayerPackage == player.packageName,
-                    leading: const Icon(Icons.smart_display_rounded),
-                    title: Text(player.label),
-                    subtitle: Text(player.packageName),
-                    trailing:
-                        _preferredExternalPlayerPackage == player.packageName
-                            ? const Icon(Icons.check_circle_rounded)
-                            : null,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      _setPreferredExternalPlayer(player.packageName);
-                    },
-                  ),
-                ),
-              ),
-              if (_installedExternalPlayers.isEmpty) ...<Widget>[
-                const SizedBox(height: 12),
-                const Text(
-                  'Nessun player esterno rilevato.',
-                  style: TextStyle(color: Colors.white70),
-                ),
-              ],
-            ],
-          ),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Chiudi'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _backupLists(String rawLists, String? selectedListId) async {
@@ -477,229 +325,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _persistLists();
   }
 
-  Future<void> _openWithExternalPlayer(
-    String url, {
-    String? entryName,
-  }) async {
-    setState(() {
-      _isBusy = true;
-      _status = 'Estrazione link video in corso...';
-    });
-
-    try {
-      final mediaUrl = await _channel.invokeMethod<String>(
-        'extractExternalMediaUrl',
-        <String, dynamic>{'url': url},
-      );
-      if (!mounted || mediaUrl == null || mediaUrl.isEmpty) return;
-      setState(() {
-        _status = 'URL estratto:\n$mediaUrl';
-      });
-      final players = await _getExternalPlayers(mediaUrl);
-      final preferredPlayer = _preferredExternalPlayerPackage == null
-          ? null
-          : players.cast<_ExternalPlayerOption?>().firstWhere(
-                (_ExternalPlayerOption? item) =>
-                    item?.packageName == _preferredExternalPlayerPackage,
-                orElse: () => null,
-              );
-      if (preferredPlayer != null) {
-        await _launchExternalPlayer(
-          mediaUrl,
-          pageUrl: url,
-          entryName: entryName,
-          packageName: preferredPlayer.packageName,
-          playerLabel: preferredPlayer.label,
-        );
-        return;
-      }
-      await _confirmExternalPlayerLaunch(
-        mediaUrl,
-        pageUrl: url,
-        entryName: entryName,
-        players: players,
-      );
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _status = e.message ?? 'Impossibile estrarre il link video.';
-      });
-    } finally {
-      if (mounted) setState(() => _isBusy = false);
-    }
-  }
-
-  Future<void> _confirmExternalPlayerLaunch(
-    String mediaUrl, {
-    String? pageUrl,
-    String? entryName,
-    List<_ExternalPlayerOption> players = const <_ExternalPlayerOption>[],
-  }) async {
-    if (!mounted) return;
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('URL estratto'),
-        content: SizedBox(
-          width: 560,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (entryName != null) ...<Widget>[
-                Text(
-                  entryName,
-                  style: Theme.of(ctx).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-              ],
-              const Text('Questo URL verra inviato al player esterno:'),
-              const SizedBox(height: 12),
-              SelectableText(
-                mediaUrl,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: Colors.white70,
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text('Scegli quale app usare:'),
-              const SizedBox(height: 8),
-              ...players.map(
-                (_ExternalPlayerOption player) => Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: ListTile(
-                    autofocus: players.first == player,
-                    leading: const Icon(Icons.smart_display_rounded),
-                    title: Text(player.label),
-                    subtitle: Text(
-                      player.packageName,
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      _launchExternalPlayer(
-                        mediaUrl,
-                        pageUrl: pageUrl,
-                        entryName: entryName,
-                        packageName: player.packageName,
-                        playerLabel: player.label,
-                      );
-                    },
-                  ),
-                ),
-              ),
-              if (players.isEmpty)
-                const Text(
-                  'Nessuna app esterna compatibile trovata.',
-                  style: TextStyle(color: Colors.white70),
-                ),
-              if (_preferredExternalPlayerPackage != null) ...<Widget>[
-                const SizedBox(height: 12),
-                const Text(
-                  'Il player predefinito viene usato automaticamente quando disponibile.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ],
-          ),
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Annulla'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _launchExternalPlayer(
-    String mediaUrl, {
-    String? pageUrl,
-    String? entryName,
-    required String packageName,
-    required String playerLabel,
-  }) async {
-    setState(() {
-      _isBusy = true;
-      _status = 'Invio URL al player esterno...';
-    });
-
-    try {
-      await _channel.invokeMethod<void>(
-        'launchExternalMediaUrl',
-        <String, dynamic>{
-          'url': mediaUrl,
-          'packageName': packageName,
-          if (pageUrl != null && pageUrl.isNotEmpty) 'pageUrl': pageUrl,
-        },
-      );
-      if (!mounted) return;
-      setState(() {
-        _activeEntryName = entryName;
-        _status = 'Inviato a $playerLabel:\n$mediaUrl';
-      });
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _status = error.message ?? 'Impossibile aprire il player esterno.';
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _isBusy = false);
-      }
-    }
-  }
-
-  Future<bool?> _choosePlayerMode() async {
-    if (!mounted) return null;
-    return showDialog<bool>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: const Text('Scegli il player'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            ListTile(
-              autofocus: true,
-              leading: const Icon(Icons.play_circle_fill_rounded),
-              title: const Text('Player interno'),
-              subtitle: const Text('WebView integrata'),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              onTap: () => Navigator.of(ctx).pop(false),
-            ),
-            ListTile(
-              leading: const Icon(Icons.open_in_new_rounded),
-              title: const Text('Player esterno'),
-              subtitle: const Text('Estrae il link video e apre un\'app esterna'),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              onTap: () => Navigator.of(ctx).pop(true),
-            ),
-          ],
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Annulla'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _askPlayerMode(String url, String? entryId, String entryName) async {
-    final external = await _choosePlayerMode();
-    if (external == null || !mounted) return;
-    if (external) {
-      _openWithExternalPlayer(url, entryName: entryName);
-    } else {
-      _openUrl(url, entryId: entryId, entryName: entryName);
-    }
+    await _openUrl(url, entryId: entryId, entryName: entryName);
   }
 
   Future<void> _openEntryWithChannelPicker(_VideoEntry entry) async {
@@ -715,10 +342,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       await _askPlayerMode(channels.first.url, entry.id, entry.name);
       return;
     }
-
-    // Per più canali: prima scegli il player, poi il canale
-    final external = await _choosePlayerMode();
-    if (external == null || !mounted) return;
 
     await showDialog<void>(
       context: context,
@@ -747,11 +370,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 ),
                 onTap: () {
                   Navigator.of(ctx).pop();
-                  if (external) {
-                    _openWithExternalPlayer(ch.url, entryName: entry.name);
-                  } else {
-                    _openUrl(ch.url, entryId: entry.id, entryName: entry.name);
-                  }
+                  _openUrl(ch.url, entryId: entry.id, entryName: entry.name);
                 },
               );
             }),
@@ -1486,16 +1105,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       'Crea liste manuali o liste importate da URL.',
                       style: theme.textTheme.bodyLarge,
                     ),
-                    const SizedBox(height: 12),
-                    FilledButton.tonalIcon(
-                      onPressed: _showExternalPlayerSettings,
-                      icon: const Icon(Icons.settings_remote_rounded),
-                      label: Text(
-                        _preferredExternalPlayerPackage == null
-                            ? 'Player esterno: chiedi'
-                            : 'Player esterno: $_preferredExternalPlayerLabel',
-                      ),
-                    ),
                     const SizedBox(height: 16),
                     FilledButton.icon(
                       onPressed: _showCreateListDialog,
@@ -2068,9 +1677,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 // Time + sport row
                 Row(
                   children: <Widget>[
-                    if (entry.eventTime != null) ...<Widget>[
+                    if (entry.eventTime != null || entry.dayLabel != null) ...<Widget>[
                       Text(
-                        entry.eventTime!,
+                        _formatEntrySchedule(entry),
                         style: const TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.w800,
@@ -2183,6 +1792,18 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return '$day/$month $hour:$minute';
   }
 
+  String _formatEntrySchedule(_VideoEntry entry) {
+    final dayLabel = entry.dayLabel?.trim();
+    final eventTime = entry.eventTime?.trim();
+    if (dayLabel != null && dayLabel.isNotEmpty) {
+      if (eventTime != null && eventTime.isNotEmpty) {
+        return '$dayLabel $eventTime';
+      }
+      return dayLabel;
+    }
+    return eventTime ?? '';
+  }
+
   IconData _sportIcon(String sportLabel) {
     switch (sportLabel) {
       case 'Calcio':
@@ -2243,31 +1864,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       default:
         return Colors.white.withValues(alpha: 0.05);
     }
-  }
-}
-
-class _ExternalPlayerOption {
-  const _ExternalPlayerOption({
-    required this.label,
-    required this.packageName,
-  });
-
-  final String label;
-  final String packageName;
-}
-
-extension on _VideoBHomePageState {
-  String get _preferredExternalPlayerLabel {
-    final preferredPackage = _preferredExternalPlayerPackage;
-    if (preferredPackage == null) {
-      return 'chiedi';
-    }
-
-    final player = _installedExternalPlayers.cast<_ExternalPlayerOption?>().firstWhere(
-          (_ExternalPlayerOption? item) => item?.packageName == preferredPackage,
-          orElse: () => null,
-        );
-    return player?.label ?? preferredPackage;
   }
 }
 

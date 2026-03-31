@@ -1,22 +1,13 @@
 package com.videob.vb_google
 
-import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
 import android.text.InputType
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
-import android.view.ViewGroup
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.util.TypedValue
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -33,13 +24,6 @@ class MainActivity : FlutterActivity() {
     private val backupFileName = "videob_lists_backup.json"
     private val backupFileNamePrefix = "videob_lists_backup"
     private val backupRelativePath = "${Environment.DIRECTORY_DOWNLOADS}/VideoB"
-    private val mxPlayerPackage = "com.mxtech.videoplayer.ad"
-    private val mxPlayerActivity = "com.mxtech.videoplayer.ad.ActivityScreen"
-    private val knownExternalPlayers = listOf(
-        ExternalPlayerApp("MX Player", "com.mxtech.videoplayer.ad"),
-        ExternalPlayerApp("VLC", "org.videolan.vlc"),
-        ExternalPlayerApp("Kodi", "org.xbmc.kodi"),
-    )
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -126,86 +110,6 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
-                "extractExternalMediaUrl" -> {
-                    val url = call.argument<String>("url")?.trim().orEmpty()
-                    if (url.isBlank()) {
-                        result.error("invalid_url", "URL non valido.", null)
-                        return@setMethodCallHandler
-                    }
-                    runOnUiThread {
-                        extractStreamViaWebView(
-                            url = url,
-                            onFound = { mediaUrl ->
-                                result.success(mediaUrl)
-                            },
-                            onTimeout = {
-                                result.error(
-                                    "no_stream",
-                                    "Nessun stream trovato nella pagina (timeout).",
-                                    null,
-                                )
-                            },
-                        )
-                    }
-                }
-
-                "launchExternalMediaUrl" -> {
-                    val url = call.argument<String>("url")?.trim().orEmpty()
-                    val packageName = call.argument<String>("packageName")?.trim().orEmpty()
-                    val pageUrl = call.argument<String>("pageUrl")?.trim().orEmpty()
-                    if (url.isBlank()) {
-                        result.error("invalid_url", "URL non valido.", null)
-                        return@setMethodCallHandler
-                    }
-
-                    runOnUiThread {
-                        try {
-                            launchVideoUrl(
-                                mediaUrl = url,
-                                preferredPackage = packageName.ifBlank { null },
-                                pageUrl = pageUrl.ifBlank { null },
-                            )
-                            result.success(null)
-                        } catch (error: Exception) {
-                            result.error(
-                                "external_player_failed",
-                                error.message ?: "Impossibile aprire il player esterno.",
-                                null,
-                            )
-                        }
-                    }
-                }
-
-                "getExternalPlayers" -> {
-                    val url = call.argument<String>("url")?.trim().orEmpty()
-                    if (url.isBlank()) {
-                        result.error("invalid_url", "URL non valido.", null)
-                        return@setMethodCallHandler
-                    }
-
-                    try {
-                        result.success(getExternalPlayers(url))
-                    } catch (error: Exception) {
-                        result.error(
-                            "player_query_failed",
-                            error.message ?: "Impossibile leggere i player esterni.",
-                            null,
-                        )
-                    }
-                }
-
-                "getInstalledExternalPlayers" -> {
-                    try {
-                        result.success(getInstalledExternalPlayers())
-                    } catch (error: Exception) {
-                        result.error(
-                            "player_query_failed",
-                            error.message ?: "Impossibile leggere i player esterni.",
-                            null,
-                        )
-                    }
-                }
-
                 "editText" -> {
                     val title = call.argument<String>("title").orEmpty()
                     val initialValue = call.argument<String>("initialValue").orEmpty()
@@ -227,224 +131,6 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
-    }
-
-    private fun launchVideoUrl(mediaUrl: String, preferredPackage: String? = null, pageUrl: String? = null) {
-        val outboundUrl = LocalProxyServer.proxyUrl(mediaUrl)
-        val mimeType = when {
-            mediaUrl.contains(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
-            mediaUrl.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
-            mediaUrl.contains(".mp4", ignoreCase = true) -> "video/mp4"
-            else -> "video/*"
-        }
-
-        if (preferredPackage == mxPlayerPackage && mediaUrl.contains(".m3u8", ignoreCase = true)) {
-            if (launchInMxPlayer(mediaUrl, pageUrl = pageUrl)) {
-                return
-            }
-        }
-
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(Uri.parse(outboundUrl), mimeType)
-            addCategory(Intent.CATEGORY_BROWSABLE)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra("url", outboundUrl)
-            putExtra(Intent.EXTRA_TEXT, outboundUrl)
-        }
-
-        val candidates = packageManager.queryIntentActivities(
-            viewIntent,
-            PackageManager.MATCH_DEFAULT_ONLY,
-        ).filterNot { it.activityInfo.packageName == packageName }
-
-        try {
-            if (preferredPackage != null) {
-                viewIntent.setPackage(preferredPackage)
-                startActivity(viewIntent)
-                return
-            }
-
-            when (candidates.size) {
-                0 -> {
-                    val fallback = Intent(this, PlayerActivity::class.java).apply {
-                        putExtra(PlayerActivity.EXTRA_URL, outboundUrl)
-                    }
-                    startActivity(fallback)
-                }
-                1 -> {
-                    viewIntent.setPackage(candidates.first().activityInfo.packageName)
-                    startActivity(viewIntent)
-                }
-                else -> {
-                    val chooser = Intent.createChooser(viewIntent, "Apri con...").apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(chooser)
-                }
-            }
-        } catch (_: android.content.ActivityNotFoundException) {
-            val fallback = Intent(this, PlayerActivity::class.java).apply {
-                putExtra(PlayerActivity.EXTRA_URL, outboundUrl)
-            }
-            startActivity(fallback)
-        }
-    }
-
-    private fun getExternalPlayers(mediaUrl: String): List<Map<String, String>> {
-        val knownPlayers = getInstalledExternalPlayers()
-
-        val mimeType = when {
-            mediaUrl.contains(".m3u8", ignoreCase = true) -> "application/x-mpegURL"
-            mediaUrl.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
-            mediaUrl.contains(".mp4", ignoreCase = true) -> "video/mp4"
-            else -> "video/*"
-        }
-
-        val probeIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(Uri.parse("http://127.0.0.1/stream"), mimeType)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-
-        val queriedPlayers = packageManager.queryIntentActivities(
-            probeIntent,
-            PackageManager.MATCH_ALL,
-        )
-            .filterNot { it.activityInfo.packageName == packageName }
-            .map { resolveInfo ->
-                val appLabel = resolveInfo.loadLabel(packageManager)?.toString().orEmpty()
-                mapOf(
-                    "label" to appLabel.ifBlank { resolveInfo.activityInfo.packageName },
-                    "packageName" to resolveInfo.activityInfo.packageName,
-                )
-            }
-            .distinctBy { it["packageName"] }
-            .sortedBy { it["label"]?.lowercase() ?: "" }
-
-        return (knownPlayers + queriedPlayers)
-            .distinctBy { it["packageName"] }
-            .sortedBy { it["label"]?.lowercase() ?: "" }
-    }
-
-    private fun isPackageInstalled(targetPackage: String): Boolean {
-        return try {
-            packageManager.getPackageInfo(targetPackage, 0)
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun getInstalledExternalPlayers(): List<Map<String, String>> {
-        return knownExternalPlayers
-            .filter { isPackageInstalled(it.packageName) }
-            .map {
-                mapOf(
-                    "label" to it.label,
-                    "packageName" to it.packageName,
-                )
-            }
-    }
-
-    private fun launchInMxPlayer(mediaUrl: String, pageUrl: String? = null): Boolean {
-        return try {
-            packageManager.getPackageInfo(mxPlayerPackage, 0)
-
-            val referer = pageUrl?.takeIf { it.isNotBlank() } ?: "https://sportsonline.si/"
-            val origin = runCatching {
-                val uri = android.net.Uri.parse(referer)
-                "${uri.scheme}://${uri.host}"
-            }.getOrElse { "https://sportsonline.si" }
-
-            val headers = arrayOf(
-                "User-Agent",
-                "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Referer",
-                referer,
-                "Origin",
-                origin,
-            )
-
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setClassName(mxPlayerPackage, mxPlayerActivity)
-                setDataAndType(Uri.parse(mediaUrl), "application/x-mpegURL")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                putExtra("package", packageName)
-                putExtra("title", "Video BonoTrot")
-                putExtra("headers", headers)
-            }
-            startActivity(intent)
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun extractStreamViaWebView(
-        url: String,
-        timeoutMs: Long = 15000,
-        onFound: (String) -> Unit,
-        onTimeout: () -> Unit,
-    ) {
-        val mediaRegex = Regex(
-            """https?://[^\s"'<>]+\.(m3u8|mpd|mp4)(\?[^\s"'<>]*)?""",
-            RegexOption.IGNORE_CASE,
-        )
-        var resolved = false
-
-        val webView = WebView(this)
-        val container = window.decorView as ViewGroup
-        webView.layoutParams = ViewGroup.LayoutParams(1, 1)
-        container.addView(webView)
-
-        fun cleanup() {
-            container.removeView(webView)
-            webView.stopLoading()
-            webView.destroy()
-        }
-
-        webView.postDelayed({
-            if (!resolved) {
-                resolved = true
-                cleanup()
-                onTimeout()
-            }
-        }, timeoutMs)
-
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            mediaPlaybackRequiresUserGesture = false
-            userAgentString =
-                "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        }
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: WebResourceRequest,
-            ): WebResourceResponse? {
-                val reqUrl = request.url.toString()
-                if (!resolved && mediaRegex.containsMatchIn(reqUrl)) {
-                    resolved = true
-                    runOnUiThread {
-                        cleanup()
-                        onFound(reqUrl)
-                    }
-                }
-                return null
-            }
-        }
-
-        webView.loadUrl(
-            url,
-            mapOf(
-                "Referer" to "https://sportsonline.si/",
-                "Origin" to "https://sportsonline.si",
-            ),
-        )
     }
 
     private fun showSystemTextEditor(
@@ -592,7 +278,3 @@ class MainActivity : FlutterActivity() {
         }
 }
 
-private data class ExternalPlayerApp(
-    val label: String,
-    val packageName: String,
-)

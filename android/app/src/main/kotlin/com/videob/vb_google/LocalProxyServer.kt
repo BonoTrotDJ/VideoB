@@ -34,11 +34,23 @@ object LocalProxyServer {
     private val clientExecutor = Executors.newCachedThreadPool()
 
     @Synchronized
-    fun proxyUrl(targetUrl: String): String {
+    fun proxyUrl(
+        targetUrl: String,
+        refererHeader: String? = null,
+        originHeader: String? = null,
+        cookieHeader: String? = null,
+        userAgentHeader: String? = null,
+    ): String {
         val socket = ensureStarted()
-        val encoded = URLEncoder.encode(targetUrl, StandardCharsets.UTF_8.name())
+        val queryItems = buildList {
+            add("url=${encodeParam(targetUrl)}")
+            refererHeader?.takeIf { it.isNotBlank() }?.let { add("referer=${encodeParam(it)}") }
+            originHeader?.takeIf { it.isNotBlank() }?.let { add("origin=${encodeParam(it)}") }
+            cookieHeader?.takeIf { it.isNotBlank() }?.let { add("cookie=${encodeParam(it)}") }
+            userAgentHeader?.takeIf { it.isNotBlank() }?.let { add("userAgent=${encodeParam(it)}") }
+        }.joinToString("&")
         val host = resolveHostAddress()
-        val proxyUrl = "http://$host:${socket.localPort}/proxy?url=$encoded"
+        val proxyUrl = "http://$host:${socket.localPort}/proxy?$queryItems"
         Log.d(tag, "Proxy URL generated for target=$targetUrl via=$proxyUrl")
         return proxyUrl
     }
@@ -102,15 +114,15 @@ object LocalProxyServer {
                     return
                 }
 
-                val targetUrl = parseTargetUrl(path)
-                if (targetUrl.isNullOrBlank()) {
+                val proxyRequest = parseProxyRequest(path)
+                if (proxyRequest?.targetUrl.isNullOrBlank()) {
                     writeError(socket.getOutputStream(), 400, "Missing URL")
                     return
                 }
 
                 proxyRequest(
                     output = socket.getOutputStream(),
-                    targetUrl = targetUrl,
+                    request = proxyRequest!!,
                     requestHeaders = headers,
                     headOnly = method == "HEAD",
                 )
@@ -124,30 +136,51 @@ object LocalProxyServer {
         }
     }
 
-    private fun parseTargetUrl(path: String): String? {
+    private fun parseProxyRequest(path: String): ProxyRequest? {
         val query = path.substringAfter('?', "")
-        if (query.isBlank()) return null
+        if (query.isBlank()) {
+            return null
+        }
 
-        return query.split('&')
-            .firstOrNull { it.startsWith("url=") }
-            ?.substringAfter('=')
-            ?.let { URLDecoder.decode(it, StandardCharsets.UTF_8.name()) }
+        val params = query.split('&')
+            .mapNotNull { part ->
+                val separatorIndex = part.indexOf('=')
+                if (separatorIndex <= 0) {
+                    return@mapNotNull null
+                }
+                val key = part.substring(0, separatorIndex)
+                val value = part.substring(separatorIndex + 1)
+                key to URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+            }
+            .toMap()
+
+        val targetUrl = params["url"]?.takeIf { it.isNotBlank() } ?: return null
+        return ProxyRequest(
+            targetUrl = targetUrl,
+            refererHeader = params["referer"],
+            originHeader = params["origin"],
+            cookieHeader = params["cookie"],
+            userAgentHeader = params["userAgent"],
+        )
     }
 
     private fun proxyRequest(
         output: OutputStream,
-        targetUrl: String,
+        request: ProxyRequest,
         requestHeaders: Map<String, String>,
         headOnly: Boolean,
     ) {
-        val upstream = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+        val refererHeader = request.refererHeader?.takeIf { it.isNotBlank() } ?: referer
+        val originHeader = request.originHeader?.takeIf { it.isNotBlank() } ?: origin
+        val upstream = (URL(request.targetUrl).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
             readTimeout = 20000
             instanceFollowRedirects = true
             requestMethod = if (headOnly) "HEAD" else "GET"
-            setRequestProperty("User-Agent", userAgent)
-            setRequestProperty("Referer", referer)
-            setRequestProperty("Origin", origin)
+            setRequestProperty("User-Agent", request.userAgentHeader?.takeIf { it.isNotBlank() } ?: userAgent)
+            setRequestProperty("Referer", refererHeader)
+            setRequestProperty("Origin", originHeader)
+            request.cookieHeader?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Cookie", it) }
             requestHeaders["range"]?.let { setRequestProperty("Range", it) }
             requestHeaders["accept"]?.let { setRequestProperty("Accept", it) }
             requestHeaders["accept-encoding"]?.let { setRequestProperty("Accept-Encoding", it) }
@@ -155,7 +188,7 @@ object LocalProxyServer {
         }
 
         val statusCode = upstream.responseCode
-        val contentType = upstream.contentType ?: guessContentType(targetUrl)
+        val contentType = upstream.contentType ?: guessContentType(request.targetUrl)
         val contentRange = upstream.getHeaderField("Content-Range")
         val acceptRanges = upstream.getHeaderField("Accept-Ranges")
         val bodyStream = if (statusCode >= 400) {
@@ -165,7 +198,7 @@ object LocalProxyServer {
         }
         Log.d(
             tag,
-            "Upstream response target=$targetUrl status=$statusCode type=$contentType range=${requestHeaders["range"]}",
+            "Upstream response target=${request.targetUrl} status=$statusCode type=$contentType range=${requestHeaders["range"]}",
         )
 
         if (bodyStream == null) {
@@ -183,9 +216,9 @@ object LocalProxyServer {
         }
 
         bodyStream.use { stream ->
-            if (!headOnly && isPlaylist(targetUrl, contentType)) {
+            if (!headOnly && isPlaylist(request.targetUrl, contentType)) {
                 val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
-                val rewritten = rewritePlaylist(targetUrl, playlistText)
+                val rewritten = rewritePlaylist(request, playlistText)
                 val bytes = rewritten.toByteArray(StandardCharsets.UTF_8)
                 writeResponse(
                     output = output,
@@ -212,8 +245,8 @@ object LocalProxyServer {
         }
     }
 
-    private fun rewritePlaylist(baseUrl: String, playlistText: String): String {
-        val resolvedBase = URI(baseUrl)
+    private fun rewritePlaylist(request: ProxyRequest, playlistText: String): String {
+        val resolvedBase = URI(request.targetUrl)
         return playlistText
             .lineSequence()
             .map { line ->
@@ -222,12 +255,36 @@ object LocalProxyServer {
                     trimmed.isEmpty() -> line
                     trimmed.startsWith("#") -> line
                     else -> {
-                        val absolute = resolvedBase.resolve(trimmed).toString()
-                        proxyUrl(absolute)
+                        val absolute = resolvedBase
+                            .resolve(trimmed)
+                            .withFallbackQueryFrom(resolvedBase)
+                            .toString()
+                        proxyUrl(
+                            targetUrl = absolute,
+                            refererHeader = request.targetUrl,
+                            originHeader = request.originHeader,
+                            cookieHeader = request.cookieHeader,
+                            userAgentHeader = request.userAgentHeader,
+                        )
                     }
                 }
             }
             .joinToString("\n")
+    }
+
+    private fun URI.withFallbackQueryFrom(base: URI): URI {
+        if (!query.isNullOrBlank() || base.query.isNullOrBlank()) {
+            return this
+        }
+        return URI(
+            scheme,
+            userInfo,
+            host,
+            port,
+            rawPath,
+            base.rawQuery,
+            rawFragment,
+        )
     }
 
     private fun isPlaylist(url: String, contentType: String): Boolean {
@@ -324,4 +381,14 @@ object LocalProxyServer {
             "127.0.0.1"
         }
     }
+
+    private fun encodeParam(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())
 }
+
+private data class ProxyRequest(
+    val targetUrl: String,
+    val refererHeader: String?,
+    val originHeader: String?,
+    val cookieHeader: String?,
+    val userAgentHeader: String?,
+)
