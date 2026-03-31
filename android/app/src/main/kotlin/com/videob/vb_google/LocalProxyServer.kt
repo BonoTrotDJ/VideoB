@@ -7,18 +7,17 @@ import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
-import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
-import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.Executors
+import okhttp3.Request
 
 object LocalProxyServer {
     private const val tag = "VideoBProxy"
@@ -40,6 +39,7 @@ object LocalProxyServer {
         originHeader: String? = null,
         cookieHeader: String? = null,
         userAgentHeader: String? = null,
+        dohEnabled: Boolean = false,
     ): String {
         val socket = ensureStarted()
         val queryItems = buildList {
@@ -48,6 +48,7 @@ object LocalProxyServer {
             originHeader?.takeIf { it.isNotBlank() }?.let { add("origin=${encodeParam(it)}") }
             cookieHeader?.takeIf { it.isNotBlank() }?.let { add("cookie=${encodeParam(it)}") }
             userAgentHeader?.takeIf { it.isNotBlank() }?.let { add("userAgent=${encodeParam(it)}") }
+            if (dohEnabled) add("doh=1")
         }.joinToString("&")
         val host = resolveHostAddress()
         val proxyUrl = "http://$host:${socket.localPort}/proxy?$queryItems"
@@ -161,6 +162,7 @@ object LocalProxyServer {
             originHeader = params["origin"],
             cookieHeader = params["cookie"],
             userAgentHeader = params["userAgent"],
+            dohEnabled = params["doh"] == "1",
         )
     }
 
@@ -172,75 +174,75 @@ object LocalProxyServer {
     ) {
         val refererHeader = request.refererHeader?.takeIf { it.isNotBlank() } ?: referer
         val originHeader = request.originHeader?.takeIf { it.isNotBlank() } ?: origin
-        val upstream = (URL(request.targetUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 20000
-            instanceFollowRedirects = true
-            requestMethod = if (headOnly) "HEAD" else "GET"
-            setRequestProperty("User-Agent", request.userAgentHeader?.takeIf { it.isNotBlank() } ?: userAgent)
-            setRequestProperty("Referer", refererHeader)
-            setRequestProperty("Origin", originHeader)
-            request.cookieHeader?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Cookie", it) }
-            requestHeaders["range"]?.let { setRequestProperty("Range", it) }
-            requestHeaders["accept"]?.let { setRequestProperty("Accept", it) }
-            requestHeaders["accept-encoding"]?.let { setRequestProperty("Accept-Encoding", it) }
-            requestHeaders["connection"]?.let { setRequestProperty("Connection", it) }
+        val requestBuilder = Request.Builder()
+            .url(request.targetUrl)
+            .header("User-Agent", request.userAgentHeader?.takeIf { it.isNotBlank() } ?: userAgent)
+            .header("Referer", refererHeader)
+            .header("Origin", originHeader)
+            .header("Accept-Encoding", "identity")
+
+        request.cookieHeader?.takeIf { it.isNotBlank() }?.let {
+            requestBuilder.header("Cookie", it)
+        }
+        requestHeaders["range"]?.let { requestBuilder.header("Range", it) }
+        requestHeaders["accept"]?.let { requestBuilder.header("Accept", it) }
+        if (headOnly) {
+            requestBuilder.head()
         }
 
-        val statusCode = upstream.responseCode
-        val contentType = upstream.contentType ?: guessContentType(request.targetUrl)
-        val contentRange = upstream.getHeaderField("Content-Range")
-        val acceptRanges = upstream.getHeaderField("Accept-Ranges")
-        val bodyStream = if (statusCode >= 400) {
-            upstream.errorStream
-        } else {
-            upstream.inputStream
-        }
-        Log.d(
-            tag,
-            "Upstream response target=${request.targetUrl} status=$statusCode type=$contentType range=${requestHeaders["range"]}",
-        )
-
-        if (bodyStream == null) {
-            writeResponse(
-                output = output,
-                statusCode = statusCode,
-                contentType = contentType,
-                contentLength = 0,
-                contentRange = contentRange,
-                acceptRanges = acceptRanges,
-                body = null,
-                headOnly = headOnly,
+        NetworkClientFactory.get(request.dohEnabled).newCall(requestBuilder.build()).execute().use { upstream ->
+            val statusCode = upstream.code
+            val body = upstream.body
+            val contentType = body?.contentType()?.toString() ?: guessContentType(request.targetUrl)
+            val contentRange = upstream.header("Content-Range")
+            val acceptRanges = upstream.header("Accept-Ranges")
+            val bodyStream = body?.byteStream()
+            Log.d(
+                tag,
+                "Upstream response target=${request.targetUrl} status=$statusCode type=$contentType range=${requestHeaders["range"]} doh=${request.dohEnabled}",
             )
-            return
-        }
 
-        bodyStream.use { stream ->
-            if (!headOnly && isPlaylist(request.targetUrl, contentType)) {
-                val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
-                val rewritten = rewritePlaylist(request, playlistText)
-                val bytes = rewritten.toByteArray(StandardCharsets.UTF_8)
-                writeResponse(
-                    output = output,
-                    statusCode = statusCode,
-                    contentType = "application/vnd.apple.mpegurl",
-                    contentLength = bytes.size.toLong(),
-                    contentRange = null,
-                    acceptRanges = "bytes",
-                    body = ByteArrayInputStream(bytes),
-                    headOnly = false,
-                )
-            } else {
+            if (bodyStream == null) {
                 writeResponse(
                     output = output,
                     statusCode = statusCode,
                     contentType = contentType,
-                    contentLength = upstream.contentLengthLong,
+                    contentLength = 0,
                     contentRange = contentRange,
                     acceptRanges = acceptRanges,
-                    body = stream,
+                    body = null,
                     headOnly = headOnly,
                 )
+                return
+            }
+
+            bodyStream.use { stream ->
+                if (!headOnly && isPlaylist(request.targetUrl, contentType)) {
+                    val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
+                    val rewritten = rewritePlaylist(request, playlistText)
+                    val bytes = rewritten.toByteArray(StandardCharsets.UTF_8)
+                    writeResponse(
+                        output = output,
+                        statusCode = statusCode,
+                        contentType = "application/vnd.apple.mpegurl",
+                        contentLength = bytes.size.toLong(),
+                        contentRange = null,
+                        acceptRanges = "bytes",
+                        body = ByteArrayInputStream(bytes),
+                        headOnly = false,
+                    )
+                } else {
+                    writeResponse(
+                        output = output,
+                        statusCode = statusCode,
+                        contentType = contentType,
+                        contentLength = body.contentLength(),
+                        contentRange = contentRange,
+                        acceptRanges = acceptRanges,
+                        body = stream,
+                        headOnly = headOnly,
+                    )
+                }
             }
         }
     }
@@ -265,6 +267,7 @@ object LocalProxyServer {
                             originHeader = request.originHeader,
                             cookieHeader = request.cookieHeader,
                             userAgentHeader = request.userAgentHeader,
+                            dohEnabled = request.dohEnabled,
                         )
                     }
                 }
@@ -391,4 +394,5 @@ private data class ProxyRequest(
     val originHeader: String?,
     val cookieHeader: String?,
     val userAgentHeader: String?,
+    val dohEnabled: Boolean,
 )

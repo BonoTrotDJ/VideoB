@@ -11,17 +11,21 @@ import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.TextView
+import java.io.FilterInputStream
+import okhttp3.Request
 
 class PlayerActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var statusView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var loadingOverlay: View
+    private var dohEnabled: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +37,7 @@ class PlayerActivity : Activity() {
         loadingOverlay = findViewById(R.id.player_loading_overlay)
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
+        dohEnabled = intent.getBooleanExtra(EXTRA_DOH_ENABLED, false)
         if (url.isBlank()) {
             statusView.text = "URL non valido."
             return
@@ -81,6 +86,70 @@ class PlayerActivity : Activity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?,
+            ): WebResourceResponse? {
+                if (!dohEnabled) {
+                    return super.shouldInterceptRequest(view, request)
+                }
+
+                val target = request?.url?.toString()?.trim().orEmpty()
+                if (target.isBlank() ||
+                    target.startsWith("data:") ||
+                    target.startsWith("blob:") ||
+                    target.startsWith("file:") ||
+                    target.startsWith("http://127.0.0.1") ||
+                    target.startsWith("http://localhost")
+                ) {
+                    return super.shouldInterceptRequest(view, request)
+                }
+                val webRequest = request ?: return super.shouldInterceptRequest(view, request)
+
+                return runCatching {
+                    val requestBuilder = Request.Builder().url(target)
+                    for ((name, value) in webRequest.requestHeaders) {
+                        if (!name.equals("Accept-Encoding", ignoreCase = true)) {
+                            requestBuilder.header(name, value)
+                        }
+                    }
+                    if (webRequest.requestHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                        requestBuilder.header("User-Agent", webView.settings.userAgentString)
+                    }
+                    requestBuilder.header("Accept-Encoding", "identity")
+
+                    val response = NetworkClientFactory.get(true)
+                        .newCall(requestBuilder.build())
+                        .execute()
+                    val body = response.body ?: run {
+                        response.close()
+                        return@runCatching null
+                    }
+                    val contentType = body.contentType()
+                    val mimeType = contentType?.let { "${it.type}/${it.subtype}" }
+                        ?: guessMimeType(target)
+                    val encoding = contentType?.charset(Charsets.UTF_8)?.name() ?: "utf-8"
+                    val headers = response.headers.toMultimap()
+                        .mapValues { (_, values) -> values.joinToString(", ") }
+                        .toMutableMap()
+                    headers.remove("content-encoding")
+                    val stream = object : FilterInputStream(body.byteStream()) {
+                        override fun close() {
+                            super.close()
+                            response.close()
+                        }
+                    }
+                    WebResourceResponse(
+                        mimeType,
+                        encoding,
+                        response.code,
+                        response.message.ifBlank { "OK" },
+                        headers,
+                        stream,
+                    )
+                }.getOrNull()
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
                 request: WebResourceRequest?,
@@ -109,12 +178,23 @@ class PlayerActivity : Activity() {
         loadingOverlay.visibility = View.VISIBLE
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
-        statusView.text = "Caricamento..."
+        statusView.text = if (dohEnabled) "Caricamento con DNS 1.1.1.1..." else "Caricamento..."
 
         if (StreamExtractor.looksLikeDirectMedia(url)) {
+            val mediaUrl = if (dohEnabled) {
+                LocalProxyServer.proxyUrl(
+                    targetUrl = url,
+                    refererHeader = "https://sportsonline.si/",
+                    originHeader = "https://sportsonline.si",
+                    userAgentHeader = webView.settings.userAgentString,
+                    dohEnabled = true,
+                )
+            } else {
+                url
+            }
             webView.loadDataWithBaseURL(
                 url,
-                videoHtml(url),
+                videoHtml(mediaUrl),
                 "text/html",
                 "utf-8",
                 null,
@@ -130,6 +210,20 @@ class PlayerActivity : Activity() {
             ),
         )
     }
+
+    private fun guessMimeType(url: String): String =
+        when {
+            url.contains(".m3u8", ignoreCase = true) -> "application/vnd.apple.mpegurl"
+            url.contains(".ts", ignoreCase = true) -> "video/mp2t"
+            url.contains(".mp4", ignoreCase = true) -> "video/mp4"
+            url.contains(".m3u", ignoreCase = true) -> "audio/x-mpegurl"
+            url.contains(".js", ignoreCase = true) -> "application/javascript"
+            url.contains(".css", ignoreCase = true) -> "text/css"
+            url.contains(".svg", ignoreCase = true) -> "image/svg+xml"
+            url.contains(".png", ignoreCase = true) -> "image/png"
+            url.contains(".jpg", ignoreCase = true) || url.contains(".jpeg", ignoreCase = true) -> "image/jpeg"
+            else -> "text/html"
+        }
 
     private fun injectPlayerControls(view: WebView) {
         view.evaluateJavascript(
@@ -451,5 +545,6 @@ class PlayerActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "extra_url"
+        const val EXTRA_DOH_ENABLED = "extra_doh_enabled"
     }
 }

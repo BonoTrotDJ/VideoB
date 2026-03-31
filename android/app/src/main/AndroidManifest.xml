@@ -45,6 +45,14 @@
             android:exported="false"
             android:hardwareAccelerated="true"
             android:theme="@style/NormalTheme" />
+        <service
+            android:name=".DnsVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

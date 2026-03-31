@@ -132,6 +132,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   final ScrollController _mainScrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final FocusNode _menuFocusNode = FocusNode();
+  final FocusNode _refreshImportedListFocusNode = FocusNode();
 
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
@@ -239,6 +240,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _entryUrlController.dispose();
     _mainScrollController.dispose();
     _menuFocusNode.dispose();
+    _refreshImportedListFocusNode.dispose();
     super.dispose();
   }
 
@@ -462,6 +464,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     try {
       await _channel.invokeMethod<void>('openUrl', <String, dynamic>{
         'url': rawUrl,
+        'dohEnabled': _dohEnabled,
       });
       if (!mounted) {
         return;
@@ -486,7 +489,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   Future<List<String>> _extractLinksFromUrl(String url) async {
     final response = await _channel.invokeMethod<dynamic>(
       'extractLinks',
-      <String, dynamic>{'url': url},
+      <String, dynamic>{'url': url, 'dohEnabled': _dohEnabled},
     );
 
     return (response as List<dynamic>? ?? <dynamic>[])
@@ -518,7 +521,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   Future<String?> _resolveWithDoh(String hostname) async {
     try {
       final uri = Uri.parse(
-          'https://1.1.1.1/dns-query?name=${Uri.encodeComponent(hostname)}&type=A');
+          'https://cloudflare-dns.com/dns-query?name=${Uri.encodeComponent(hostname)}&type=A');
       final client = HttpClient();
       final request = await client.getUrl(uri);
       request.headers.set('accept', 'application/dns-json');
@@ -539,9 +542,38 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Future<void> _setDohEnabled(bool value) async {
-    setState(() => _dohEnabled = value);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_dohKey, value);
+    try {
+      final applied =
+          await _channel.invokeMethod<bool>('setDnsVpnEnabled', <String, dynamic>{
+        'enabled': value,
+      });
+      if (applied != true) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _status = value ? 'attivazione dns annullata' : 'disattivazione dns fallita';
+        });
+        return;
+      }
+
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _dohEnabled = value;
+        _status = value ? 'dns 1.1.1.1 attivo' : 'dns 1.1.1.1 disattivo';
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_dohKey, value);
+    } on PlatformException {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'errore attivazione dns';
+      });
+    }
   }
 
   Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromSource(String sourceUrl) async {
@@ -1064,9 +1096,17 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         return;
       }
       setState(() {
-        _status =
-            error.message ?? 'Errore durante l\'aggiornamento della lista.';
+        _status = 'errore connessione';
       });
+      _requestRefreshImportedListFocus();
+    } on Exception {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status = 'errore connessione';
+      });
+      _requestRefreshImportedListFocus();
     } finally {
       if (mounted) {
         setState(() {
@@ -1083,6 +1123,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return '$host ${index + 1}';
     }
     return 'Link ${index + 1}';
+  }
+
+  void _requestRefreshImportedListFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _refreshImportedListFocusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _saveManualEntry() async {
@@ -1755,6 +1803,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
         if (selectedList.sourceType == _VideoListSourceType.imported)
           ActionChip(
+            focusNode: _refreshImportedListFocusNode,
             avatar: _isBusy
                 ? const SizedBox(
                     width: 18,
@@ -1763,7 +1812,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   )
                 : const Icon(Icons.refresh_rounded, size: 18),
             label: Text(_isBusy ? 'Aggiornamento...' : 'Aggiorna Lista'),
-            onPressed: _isBusy ? null : () => _refreshImportedList(selectedList.id),
+            onPressed:
+                _isBusy ? null : () => _refreshImportedList(selectedList.id),
           ),
       ],
     );

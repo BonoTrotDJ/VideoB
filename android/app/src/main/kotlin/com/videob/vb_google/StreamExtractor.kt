@@ -1,11 +1,10 @@
 package com.videob.vb_google
 
 import java.io.BufferedInputStream
-import java.net.HttpURLConnection
 import java.net.URI
-import java.net.URL
 import java.util.LinkedHashSet
 import java.util.regex.Pattern
+import okhttp3.Request
 
 object StreamExtractor {
     private val iframePattern =
@@ -18,8 +17,8 @@ object StreamExtractor {
     private val urlPattern =
         Pattern.compile("""https?:\/\/[^"'\\\s<>()]+""", Pattern.CASE_INSENSITIVE)
 
-    fun extractLinks(sourceUrl: String): List<String> {
-        val html = download(sourceUrl)
+    fun extractLinks(sourceUrl: String, useDoh: Boolean = false): List<String> {
+        val html = download(sourceUrl, useDoh)
         val links = LinkedHashSet<String>()
 
         collectMatches(iframePattern, html, sourceUrl, links)
@@ -83,21 +82,25 @@ object StreamExtractor {
             normalized.contains(".mkv")
     }
 
-    private fun download(url: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12000
-            readTimeout = 12000
-            instanceFollowRedirects = true
-            setRequestProperty(
+    private fun download(url: String, useDoh: Boolean): String {
+        val request = Request.Builder()
+            .url(url)
+            .header(
                 "User-Agent",
                 "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             )
-            setRequestProperty("Referer", "https://sportsonline.si/")
-        }
+            .header("Referer", "https://sportsonline.si/")
+            .build()
 
-        return connection.inputStream.use { input ->
-            BufferedInputStream(input).reader(Charsets.UTF_8).readText()
+        NetworkClientFactory.get(useDoh).newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("Errore download sorgente: ${response.code}")
+            }
+            val body = response.body ?: error("Risposta vuota dalla sorgente.")
+            return body.byteStream().use { input ->
+                BufferedInputStream(input).reader(Charsets.UTF_8).readText()
+            }
         }
     }
 }

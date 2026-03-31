@@ -3,6 +3,7 @@ package com.videob.vb_google
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
+import android.net.VpnService
 import android.text.InputType
 import android.os.Build
 import android.os.Environment
@@ -24,6 +25,8 @@ class MainActivity : FlutterActivity() {
     private val backupFileName = "videob_lists_backup.json"
     private val backupFileNamePrefix = "videob_lists_backup"
     private val backupRelativePath = "${Environment.DIRECTORY_DOWNLOADS}/VideoB"
+    private var pendingDnsVpnResult: MethodChannel.Result? = null
+    private var pendingDnsVpnEnable = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -35,6 +38,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "openUrl" -> {
                     val url = call.argument<String>("url")?.trim().orEmpty()
+                    val dohEnabled = call.argument<Boolean>("dohEnabled") == true
                     if (url.isBlank()) {
                         result.error("invalid_url", "URL non valido.", null)
                         return@setMethodCallHandler
@@ -42,6 +46,7 @@ class MainActivity : FlutterActivity() {
 
                     val intent = Intent(this, PlayerActivity::class.java).apply {
                         putExtra(PlayerActivity.EXTRA_URL, url)
+                        putExtra(PlayerActivity.EXTRA_DOH_ENABLED, dohEnabled)
                     }
                     startActivity(intent)
                     result.success(null)
@@ -49,6 +54,7 @@ class MainActivity : FlutterActivity() {
 
                 "extractLinks" -> {
                     val url = call.argument<String>("url")?.trim().orEmpty()
+                    val dohEnabled = call.argument<Boolean>("dohEnabled") == true
                     if (url.isBlank()) {
                         result.error("invalid_url", "URL non valido.", null)
                         return@setMethodCallHandler
@@ -56,7 +62,7 @@ class MainActivity : FlutterActivity() {
 
                     executor.execute {
                         try {
-                            val links = StreamExtractor.extractLinks(url)
+                            val links = StreamExtractor.extractLinks(url, dohEnabled)
                             runOnUiThread { result.success(links) }
                         } catch (error: Exception) {
                             runOnUiThread {
@@ -128,9 +134,52 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "setDnsVpnEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") == true
+                    handleDnsVpnToggle(enabled, result)
+                }
+
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun handleDnsVpnToggle(enabled: Boolean, result: MethodChannel.Result) {
+        if (!enabled) {
+            DnsVpnService.stop(this)
+            result.success(true)
+            return
+        }
+
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent == null) {
+            DnsVpnService.start(this)
+            result.success(true)
+            return
+        }
+
+        pendingDnsVpnResult = result
+        pendingDnsVpnEnable = true
+        startActivityForResult(prepareIntent, REQUEST_PREPARE_DNS_VPN)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode != REQUEST_PREPARE_DNS_VPN) {
+            return
+        }
+
+        val callback = pendingDnsVpnResult
+        pendingDnsVpnResult = null
+
+        if (resultCode == RESULT_OK && pendingDnsVpnEnable) {
+            DnsVpnService.start(this)
+            callback?.success(true)
+        } else {
+            callback?.success(false)
+        }
+        pendingDnsVpnEnable = false
     }
 
     private fun showSystemTextEditor(
@@ -276,5 +325,9 @@ class MainActivity : FlutterActivity() {
         } else {
             null
         }
+
+    companion object {
+        private const val REQUEST_PREPARE_DNS_VPN = 1201
+    }
 }
 
