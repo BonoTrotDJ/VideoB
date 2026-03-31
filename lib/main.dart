@@ -1,11 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart' as http_io;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -246,7 +244,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Future<void> _loadLists() async {
     final preferences = await SharedPreferences.getInstance();
-    _dohEnabled = preferences.getBool(_dohKey) ?? false;
+    final storedDohEnabled = preferences.getBool(_dohKey) ?? false;
+    final nativeDohEnabled =
+        await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
+    _dohEnabled = nativeDohEnabled || storedDohEnabled;
+    await preferences.setBool(_dohKey, _dohEnabled);
     var rawLists = preferences.getString(_listsKey);
     var selectedListId = preferences.getString(_selectedListKey);
     var parsedLists = _parseStoredLists(rawLists);
@@ -464,7 +466,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     try {
       await _channel.invokeMethod<void>('openUrl', <String, dynamic>{
         'url': rawUrl,
-        'dohEnabled': _dohEnabled,
+        'dohEnabled': false,
       });
       if (!mounted) {
         return;
@@ -489,7 +491,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   Future<List<String>> _extractLinksFromUrl(String url) async {
     final response = await _channel.invokeMethod<dynamic>(
       'extractLinks',
-      <String, dynamic>{'url': url, 'dohEnabled': _dohEnabled},
+      <String, dynamic>{'url': url, 'dohEnabled': false},
     );
 
     return (response as List<dynamic>? ?? <dynamic>[])
@@ -498,48 +500,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .toList();
   }
 
-  http.Client _createHttpClient() {
-    if (!_dohEnabled) return http.Client();
-    final ioClient = HttpClient();
-    ioClient.connectionFactory =
-        (Uri uri, String? proxyHost, int? proxyPort) async {
-      final hostname = uri.host;
-      final port =
-          uri.port == 0 ? (uri.scheme == 'https' ? 443 : 80) : uri.port;
-      String connectHost = hostname;
-      if (!RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(hostname)) {
-        connectHost = await _resolveWithDoh(hostname) ?? hostname;
-      }
-      // Return a plain Socket connected to the resolved IP.
-      // HttpClient handles TLS upgrade for HTTPS using uri.host for SNI.
-      final socket = await Socket.connect(connectHost, port);
-      return ConnectionTask.fromSocket(Future.value(socket), () {});
-    };
-    return http_io.IOClient(ioClient);
-  }
-
-  Future<String?> _resolveWithDoh(String hostname) async {
-    try {
-      final uri = Uri.parse(
-          'https://cloudflare-dns.com/dns-query?name=${Uri.encodeComponent(hostname)}&type=A');
-      final client = HttpClient();
-      final request = await client.getUrl(uri);
-      request.headers.set('accept', 'application/dns-json');
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
-      client.close();
-      final json = jsonDecode(body) as Map<String, dynamic>;
-      final answers = json['Answer'] as List<dynamic>?;
-      if (answers != null) {
-        for (final answer in answers) {
-          if ((answer as Map<String, dynamic>)['type'] == 1) {
-            return answer['data'] as String?;
-          }
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
+  http.Client _createHttpClient() => http.Client();
 
   Future<void> _setDohEnabled(bool value) async {
     try {
@@ -562,10 +523,46 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
       setState(() {
         _dohEnabled = value;
-        _status = value ? 'dns 1.1.1.1 attivo' : 'dns 1.1.1.1 disattivo';
+        _status = value
+            ? 'dns 1.1.1.1 attivo, aggiornamento in corso...'
+            : 'dns 1.1.1.1 disattivo';
       });
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_dohKey, value);
+
+      if (!value) {
+        return;
+      }
+
+      final dnsReady = await _waitForDnsVpnState(true);
+      if (!dnsReady) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _status = 'dns attivo ma non ancora pronto';
+        });
+        return;
+      }
+
+      final selectedList = _selectedList;
+      if (selectedList?.sourceType != _VideoListSourceType.imported) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _status = 'dns 1.1.1.1 attivo';
+        });
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      await _refreshImportedList(
+        selectedList!.id,
+        keepFocusOnRefresh: true,
+        showConnectionErrorOnly: true,
+      );
     } on PlatformException {
       if (!mounted) {
         return;
@@ -1047,7 +1044,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     await _persistLists();
   }
 
-  Future<void> _refreshImportedList(String listId) async {
+  Future<void> _refreshImportedList(
+    String listId, {
+    bool keepFocusOnRefresh = false,
+    bool showConnectionErrorOnly = false,
+  }) async {
     final list = _videoLists.cast<_VideoList?>().firstWhere(
           (_VideoList? item) => item?.id == listId,
           orElse: () => null,
@@ -1068,6 +1069,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       _isBusy = true;
       _status = 'Aggiornamento lista "${list.name}" in corso...';
     });
+    if (keepFocusOnRefresh) {
+      _requestRefreshImportedListFocus();
+    }
 
     try {
       final (importedEntries, parsedLastUpdate) = await _loadEntriesFromSource(sourceUrl);
@@ -1096,7 +1100,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         return;
       }
       setState(() {
-        _status = 'errore connessione';
+        _status = showConnectionErrorOnly
+            ? 'errore connessione'
+            : (error.message ?? 'errore connessione');
       });
       _requestRefreshImportedListFocus();
     } on Exception {
@@ -1123,6 +1129,18 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return '$host ${index + 1}';
     }
     return 'Link ${index + 1}';
+  }
+
+  Future<bool> _waitForDnsVpnState(bool expectedValue) async {
+    for (var i = 0; i < 12; i++) {
+      final current =
+          await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
+      if (current == expectedValue) {
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+    }
+    return false;
   }
 
   void _requestRefreshImportedListFocus() {

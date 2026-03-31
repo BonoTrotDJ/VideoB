@@ -139,6 +139,10 @@ class MainActivity : FlutterActivity() {
                     handleDnsVpnToggle(enabled, result)
                 }
 
+                "getDnsVpnEnabled" -> {
+                    result.success(DnsVpnService.isActive())
+                }
+
                 else -> result.notImplemented()
             }
         }

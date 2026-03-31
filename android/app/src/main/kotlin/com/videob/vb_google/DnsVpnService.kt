@@ -56,6 +56,7 @@ class DnsVpnService : VpnService() {
 
         vpnInterface = builder.establish() ?: return
         running.set(true)
+        serviceActive.set(true)
 
         workerThread = thread(name = "VideoBDnsVpn", start = true) {
             runDnsLoop(vpnInterface!!)
@@ -64,6 +65,7 @@ class DnsVpnService : VpnService() {
 
     private fun stopVpn() {
         running.set(false)
+        serviceActive.set(false)
         workerThread?.interrupt()
         workerThread = null
         vpnInterface?.close()
@@ -271,6 +273,7 @@ class DnsVpnService : VpnService() {
         private const val SECONDARY_DNS = "1.0.0.1"
         private const val VPN_ADDRESS = "10.10.10.1"
         private const val MAX_PACKET_SIZE = 32767
+        private val serviceActive = AtomicBoolean(false)
 
         fun start(context: Context) {
             context.startService(Intent(context, DnsVpnService::class.java))
@@ -282,5 +285,7 @@ class DnsVpnService : VpnService() {
             }
             context.startService(intent)
         }
+
+        fun isActive(): Boolean = serviceActive.get()
     }
 }
