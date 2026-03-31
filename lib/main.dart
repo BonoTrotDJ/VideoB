@@ -11,7 +11,7 @@ void main() {
 }
 
 const String _sportListName = 'Sport';
-const String _sportListSourceUrl = 'https://sportsonline.st/prog.txt';
+const String _sportListSourceUrl = 'https://sito.it/prog.txt';
 
 class VideoBApp extends StatelessWidget {
   const VideoBApp({super.key});
@@ -1649,28 +1649,25 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 onChanged: (bool val) => _setDohEnabled(val),
               ),
               const Divider(height: 1),
-              InkWell(
-                onTap: _ensureSportList,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        _appDisplayName,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      _appDisplayName,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Versione $_appVersion',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: Colors.white70,
-                        ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Versione $_appVersion',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ],
