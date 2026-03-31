@@ -128,6 +128,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   final TextEditingController _entryNameController = TextEditingController();
   final TextEditingController _entryUrlController = TextEditingController();
   final ScrollController _mainScrollController = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
@@ -473,7 +474,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .toList();
   }
 
-  Future<List<_VideoEntry>> _loadEntriesFromSource(String sourceUrl) async {
+  Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromSource(String sourceUrl) async {
     final uri = Uri.tryParse(sourceUrl);
     if (uri == null) {
       throw const FormatException('URL sorgente non valido.');
@@ -486,7 +487,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     final links =
         (await _extractLinksFromUrl(sourceUrl)).where(_isPhpUrl).toList();
-    return <_VideoEntry>[
+    return (<_VideoEntry>[
       for (var i = 0; i < links.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
@@ -496,10 +497,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           sportLabel:
               _detectSportFromName(_buildImportedEntryName(links[i], i)),
         ),
-    ];
+    ], null);
   }
 
-  Future<List<_VideoEntry>> _loadEntriesFromPlainTextSource(Uri uri) async {
+  Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(Uri uri) async {
     final response = await http.get(uri);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw PlatformException(
@@ -509,8 +510,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       );
     }
 
+    final lastUpdate = _parseLastUpdateFromText(response.body);
     final events = _parsePlainTextSchedule(response.body);
-    return <_VideoEntry>[
+    return (<_VideoEntry>[
       for (var i = 0; i < events.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
@@ -522,7 +524,21 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           sportLabel: events[i].sportLabel,
           channels: events[i].channels,
         ),
-    ];
+    ], lastUpdate);
+  }
+
+  DateTime? _parseLastUpdateFromText(String raw) {
+    final match = RegExp(
+      r'LAST\s+UPDATE\s*:\s*(\d{1,2})-(\d{1,2})-(\d{2,4})',
+      caseSensitive: false,
+    ).firstMatch(raw);
+    if (match == null) return null;
+    final day = int.tryParse(match.group(1) ?? '');
+    final month = int.tryParse(match.group(2) ?? '');
+    var year = int.tryParse(match.group(3) ?? '');
+    if (day == null || month == null || year == null) return null;
+    if (year < 100) year += 2000;
+    return DateTime(year, month, day);
   }
 
   bool _isPhpUrl(String url) {
@@ -949,11 +965,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     });
 
     try {
-      final importedEntries = await _loadEntriesFromSource(sourceUrl);
+      final (importedEntries, parsedLastUpdate) = await _loadEntriesFromSource(sourceUrl);
 
       final updatedList = list.copyWith(
         entries: importedEntries,
-        updatedAt: DateTime.now(),
+        updatedAt: parsedLastUpdate ?? DateTime.now(),
       );
 
       if (!mounted) {
@@ -1116,10 +1132,44 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final theme = Theme.of(context);
     final selectedList = _selectedList;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) async {
+        if (didPop) return;
+        if (_scaffoldKey.currentState?.isDrawerOpen == true) {
+          _scaffoldKey.currentState?.closeDrawer();
+          return;
+        }
+        final shouldExit = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext ctx) => AlertDialog(
+            title: const Text('Uscire dall\'app?'),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Annulla'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Esci'),
+              ),
+            ],
+          ),
+        );
+        if (shouldExit == true && context.mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+      key: _scaffoldKey,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: IconButton(
+          autofocus: true,
+          icon: const Icon(Icons.menu),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
         title: Text(selectedList?.name ?? 'VideoB'),
       ),
       drawer: Drawer(
@@ -1140,7 +1190,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      initialValue: _availableSports.contains(_selectedSportFilter)
+                      value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
                       decoration: const InputDecoration(
@@ -1180,7 +1230,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
-                      initialValue:
+                      value:
                           _availableLanguages.contains(_selectedLanguageFilter)
                               ? _selectedLanguageFilter
                               : null,
@@ -1205,7 +1255,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                               children: <Widget>[
                                 const Icon(Icons.language_rounded, size: 18),
                                 const SizedBox(width: 10),
-                                Expanded(child: Text(language)),
+                                Text(language),
                               ],
                             ),
                           ),
@@ -1456,13 +1506,15 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       children: <Widget>[
                         _SectionCard(
                           title: selectedList.name,
-                          subtitle: selectedList.sourceType ==
-                                  _VideoListSourceType.manual
-                              ? 'Lista manuale: inserisci URL e nomi a mano.'
-                              : 'Lista importata: aggiorna quando vuoi rileggendo l\'URL sorgente.',
+                          subtitle: '',
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
+                              if (selectedList.sourceType ==
+                                  _VideoListSourceType.imported) ...<Widget>[
+                                _buildImportedControls(selectedList),
+                                const SizedBox(height: 18),
+                              ],
                               _buildListMeta(theme, selectedList),
                               const SizedBox(height: 18),
                               if (_activeEntryName != null) ...<Widget>[
@@ -1496,66 +1548,61 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                               ],
                               if (selectedList.sourceType ==
                                   _VideoListSourceType.manual)
-                                _buildManualEditor(theme)
-                              else
-                                _buildImportedControls(selectedList),
-                              if (_status != null) ...<Widget>[
-                                const SizedBox(height: 16),
-                                Text(
-                                  _status!,
-                                  style: theme.textTheme.bodyLarge?.copyWith(
-                                    color: const Color(0xFFCFD9E6),
-                                  ),
-                                ),
-                              ],
+                                _buildManualEditor(theme),
                             ],
                           ),
                         ),
                         const SizedBox(height: 20),
-                        _SectionCard(
-                          title: _formatItalianDate(DateTime.now()),
-                          subtitle: '',
-                          child: _filteredEntries.isEmpty
-                              ? Text(
-                                  selectedList.entries.isEmpty
-                                      ? (selectedList.sourceType ==
-                                              _VideoListSourceType.manual
-                                          ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
-                                      : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
-                                      : 'Nessun risultato per i filtri selezionati.',
-                                  style: theme.textTheme.bodyLarge?.copyWith(
-                                    color: Colors.white70,
-                                  ),
-                                )
-                              : Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: _groupedFilteredEntries.expand(
-                                      (MapEntry<String, List<_VideoEntry>>
-                                          group) {
-                                    final widgets = <Widget>[
-                                      Padding(
-                                        padding: const EdgeInsets.only(
-                                          top: 4,
-                                          bottom: 12,
+                        if (_filteredEntries.isEmpty)
+                          Text(
+                            selectedList.entries.isEmpty
+                                ? (selectedList.sourceType ==
+                                        _VideoListSourceType.manual
+                                    ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
+                                    : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
+                                : 'Nessun risultato per i filtri selezionati.',
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              color: Colors.white70,
+                            ),
+                          )
+                        else
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: _groupedFilteredEntries.expand(
+                              (MapEntry<String, List<_VideoEntry>> group) {
+                                return <Widget>[
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: 16,
+                                      bottom: 10,
+                                    ),
+                                    child: Row(
+                                      children: <Widget>[
+                                        const Icon(
+                                          Icons.calendar_today_rounded,
+                                          size: 20,
                                         ),
-                                        child: Text(
+                                        const SizedBox(width: 8),
+                                        Text(
                                           group.key,
                                           style: theme.textTheme.headlineSmall
                                               ?.copyWith(
                                             fontWeight: FontWeight.w700,
                                           ),
                                         ),
-                                      ),
-                                      _buildEntryGrid(selectedList, group.value),
-                                    ];
-                                    return widgets;
-                                  }).toList(),
-                                ),
-                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  _buildEntryGrid(selectedList, group.value),
+                                ];
+                              },
+                            ).toList(),
+                          ),
                       ],
                     ),
                   ),
         ),
+      ),
       ),
     );
   }
@@ -1936,6 +1983,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   String _formatItalianDateTime(DateTime dateTime) {
     final month = _monthLabels[dateTime.month - 1];
+    if (dateTime.hour == 0 && dateTime.minute == 0 && dateTime.second == 0) {
+      return '${dateTime.day} $month';
+    }
     final hour = dateTime.hour.toString().padLeft(2, '0');
     final minute = dateTime.minute.toString().padLeft(2, '0');
     return '${dateTime.day} $month $hour:$minute';

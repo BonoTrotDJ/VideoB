@@ -12,7 +12,9 @@
       "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 shell pm list packages)",
       "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 shell dumpsys package com.videob.vb_google)",
       "Bash(curl -L \"https://get.videolan.org/vlc-android/3.6.0/VLC-Android-3.6.0-arm64-v8a.apk\" -o /tmp/vlc.apk)",
-      "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 install -r /tmp/vlc.apk)"
+      "Bash(~/Android/Sdk/platform-tools/adb -s emulator-5554 install -r /tmp/vlc.apk)",
+      "Bash(flutter build:*)",
+      "Bash(flutter install:*)"
     ]
   }
 }
