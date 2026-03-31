@@ -129,6 +129,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   final TextEditingController _entryUrlController = TextEditingController();
   final ScrollController _mainScrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final FocusNode _menuFocusNode = FocusNode();
 
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
@@ -232,6 +233,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _entryNameController.dispose();
     _entryUrlController.dispose();
     _mainScrollController.dispose();
+    _menuFocusNode.dispose();
     super.dispose();
   }
 
@@ -1166,6 +1168,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
+          focusNode: _menuFocusNode,
           autofocus: true,
           icon: const Icon(Icons.menu),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
@@ -1474,7 +1477,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
         ),
       ),
-      body: Container(
+      body: FocusTraversalGroup(
+        policy: _MenuEdgeFocusPolicy(menuFocusNode: _menuFocusNode),
+        child: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             colors: <Color>[
@@ -1602,6 +1607,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                   ),
         ),
+        ),
       ),
       ),
     );
@@ -1628,6 +1634,18 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             label: Text(
               'Ultimo aggiornamento: ${_formatItalianDateTime(selectedList.updatedAt!)}',
             ),
+          ),
+        if (selectedList.sourceType == _VideoListSourceType.imported)
+          ActionChip(
+            avatar: _isBusy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh_rounded, size: 18),
+            label: Text(_isBusy ? 'Aggiornamento...' : 'Aggiorna Lista'),
+            onPressed: _isBusy ? null : () => _refreshImportedList(selectedList.id),
           ),
       ],
     );
@@ -1705,56 +1723,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Widget _buildImportedControls(_VideoList selectedList) {
     final sourceUrl = selectedList.sourceUrl ?? '';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        SelectableText(
-          sourceUrl,
-          style: const TextStyle(color: Colors.white70),
-        ),
-        const SizedBox(height: 18),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: <Widget>[
-            FilledButton.icon(
-              onPressed:
-                  _isBusy ? null : () => _refreshImportedList(selectedList.id),
-              style: ButtonStyle(
-                backgroundColor: WidgetStateProperty.resolveWith<Color?>(
-                  (Set<WidgetState> states) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return null;
-                    }
-                    if (states.contains(WidgetState.focused)) {
-                      return Colors.white;
-                    }
-                    return null;
-                  },
-                ),
-                foregroundColor: WidgetStateProperty.resolveWith<Color?>(
-                  (Set<WidgetState> states) {
-                    if (states.contains(WidgetState.disabled)) {
-                      return null;
-                    }
-                    if (states.contains(WidgetState.focused)) {
-                      return const Color(0xFF07111F);
-                    }
-                    return null;
-                  },
-                ),
-              ),
-              icon: const Icon(Icons.refresh_rounded),
-              label: Text(_isBusy ? 'Aggiornamento...' : 'Aggiorna Lista'),
-            ),
-            FilledButton.tonal(
-              onPressed: () => _openUrl(sourceUrl),
-              child: const Text('Apri URL Sorgente'),
-            ),
-          ],
-        ),
-      ],
+    return SelectableText(
+      sourceUrl,
+      style: const TextStyle(color: Colors.white70),
     );
   }
 
@@ -2640,5 +2611,20 @@ class _SectionCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _MenuEdgeFocusPolicy extends ReadingOrderTraversalPolicy {
+  _MenuEdgeFocusPolicy({required this.menuFocusNode});
+  final FocusNode menuFocusNode;
+
+  @override
+  FocusNode? findFirstFocusInDirection(
+      FocusNode currentNode, TraversalDirection direction) {
+    final result = super.findFirstFocusInDirection(currentNode, direction);
+    if (result == null && direction == TraversalDirection.left) {
+      return menuFocusNode;
+    }
+    return result;
   }
 }
