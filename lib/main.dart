@@ -1577,8 +1577,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         Chip(label: Text('${selectedList.entries.length} link')),
         if (selectedList.updatedAt != null)
           Chip(
-              label: Text(
-                  'Aggiornata ${_formatDateTime(selectedList.updatedAt!)}')),
+            avatar: const Icon(Icons.update_rounded, size: 18),
+            label: Text(
+              'Ultimo aggiornamento: ${_formatItalianDateTime(selectedList.updatedAt!)}',
+            ),
+          ),
       ],
     );
   }
@@ -1929,6 +1932,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final weekday = _weekdayLabels[dateTime.weekday % 7];
     final month = _monthLabels[dateTime.month - 1];
     return '$weekday ${dateTime.day} $month';
+  }
+
+  String _formatItalianDateTime(DateTime dateTime) {
+    final month = _monthLabels[dateTime.month - 1];
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    return '${dateTime.day} $month $hour:$minute';
   }
 
   String _formatEntrySchedule(_VideoEntry entry) {
