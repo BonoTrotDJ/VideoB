@@ -110,6 +110,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     'Venerdì',
     'Sabato',
   ];
+  static const List<String> _monthLabels = <String>[
+    'gennaio',
+    'febbraio',
+    'marzo',
+    'aprile',
+    'maggio',
+    'giugno',
+    'luglio',
+    'agosto',
+    'settembre',
+    'ottobre',
+    'novembre',
+    'dicembre',
+  ];
 
   final TextEditingController _entryNameController = TextEditingController();
   final TextEditingController _entryUrlController = TextEditingController();
@@ -118,6 +132,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   List<_VideoList> _videoLists = const <_VideoList>[];
   String? _selectedListId;
   String? _selectedSportFilter;
+  String? _selectedLanguageFilter;
   String? _editingEntryId;
   String? _activeEntryId;
   String? _activeEntryName;
@@ -150,6 +165,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return sports;
   }
 
+  List<String> get _availableLanguages {
+    final selectedList = _selectedList;
+    if (selectedList == null) {
+      return const <String>[];
+    }
+
+    final languages = selectedList.entries
+        .expand(_entryLanguages)
+        .toSet()
+        .toList()
+      ..sort();
+    return languages;
+  }
+
   List<_VideoEntry> get _filteredEntries {
     final selectedList = _selectedList;
     if (selectedList == null) {
@@ -157,13 +186,17 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     final selectedSport = _selectedSportFilter;
-    if (selectedSport == null || selectedSport.isEmpty) {
-      return selectedList.entries;
-    }
+    final selectedLanguage = _selectedLanguageFilter;
 
-    return selectedList.entries
-        .where((_VideoEntry entry) => entry.sportLabel == selectedSport)
-        .toList();
+    return selectedList.entries.where((_VideoEntry entry) {
+      final sportMatches = selectedSport == null ||
+          selectedSport.isEmpty ||
+          entry.sportLabel == selectedSport;
+      final languageMatches = selectedLanguage == null ||
+          selectedLanguage.isEmpty ||
+          _entryLanguages(entry).contains(selectedLanguage);
+      return sportMatches && languageMatches;
+    }).toList();
   }
 
   List<MapEntry<String, List<_VideoEntry>>> get _groupedFilteredEntries {
@@ -317,6 +350,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (_selectedSportFilter != null &&
           !_availableSports.contains(_selectedSportFilter)) {
         _selectedSportFilter = null;
+      }
+      if (_selectedLanguageFilter != null &&
+          !_availableLanguages.contains(_selectedLanguageFilter)) {
+        _selectedLanguageFilter = null;
       }
       _editingEntryId = null;
       _entryNameController.clear();
@@ -1101,37 +1138,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Crea liste manuali o liste importate da URL.',
-                      style: theme.textTheme.bodyLarge,
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton.icon(
-                      onPressed: _showCreateListDialog,
-                      style: ButtonStyle(
-                        backgroundColor:
-                            WidgetStateProperty.resolveWith<Color?>(
-                          (Set<WidgetState> states) {
-                            if (states.contains(WidgetState.focused)) {
-                              return Colors.white;
-                            }
-                            return null;
-                          },
-                        ),
-                        foregroundColor:
-                            WidgetStateProperty.resolveWith<Color?>(
-                          (Set<WidgetState> states) {
-                            if (states.contains(WidgetState.focused)) {
-                              return const Color(0xFF07111F);
-                            }
-                            return null;
-                          },
-                        ),
-                      ),
-                      icon: const Icon(Icons.add_rounded),
-                      label: const Text('Nuova Lista'),
-                    ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
                       initialValue: _availableSports.contains(_selectedSportFilter)
@@ -1171,6 +1177,90 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         });
                         Navigator.of(context).pop();
                       },
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      initialValue:
+                          _availableLanguages.contains(_selectedLanguageFilter)
+                              ? _selectedLanguageFilter
+                              : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Filtro lingua',
+                      ),
+                      items: <DropdownMenuItem<String>>[
+                        const DropdownMenuItem<String>(
+                          value: '',
+                          child: Row(
+                            children: <Widget>[
+                              Icon(Icons.language_rounded, size: 18),
+                              SizedBox(width: 10),
+                              Text('Tutte le lingue'),
+                            ],
+                          ),
+                        ),
+                        ..._availableLanguages.map(
+                          (String language) => DropdownMenuItem<String>(
+                            value: language,
+                            child: Row(
+                              children: <Widget>[
+                                const Icon(Icons.language_rounded, size: 18),
+                                const SizedBox(width: 10),
+                                Expanded(child: Text(language)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      onChanged: (String? value) {
+                        setState(() {
+                          _selectedLanguageFilter =
+                              value == null || value.isEmpty ? null : value;
+                        });
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _showCreateListDialog,
+                        style: ButtonStyle(
+                          padding: WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                          minimumSize: WidgetStateProperty.all(
+                            const Size(0, 36),
+                          ),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: const VisualDensity(
+                            horizontal: -2,
+                            vertical: -2,
+                          ),
+                          backgroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return Colors.white;
+                              }
+                              return null;
+                            },
+                          ),
+                          foregroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return const Color(0xFF07111F);
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        icon: const Icon(Icons.add_rounded, size: 18),
+                        label: const Text('Aggiungi lista'),
+                      ),
                     ),
                   ],
                 ),
@@ -1423,19 +1513,16 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         ),
                         const SizedBox(height: 20),
                         _SectionCard(
-                          title: 'Contenuti',
-                          subtitle: selectedList.sourceType ==
-                                  _VideoListSourceType.manual
-                              ? 'Ogni voce puo essere modificata, aperta o eliminata.'
-                              : 'Le voci arrivano dalla pagina sorgente e si aggiornano su richiesta.',
+                          title: _formatItalianDate(DateTime.now()),
+                          subtitle: '',
                           child: _filteredEntries.isEmpty
                               ? Text(
                                   selectedList.entries.isEmpty
                                       ? (selectedList.sourceType ==
                                               _VideoListSourceType.manual
                                           ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
-                                          : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
-                                      : 'Nessun risultato per il filtro sport selezionato.',
+                                      : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
+                                      : 'Nessun risultato per i filtri selezionati.',
                                   style: theme.textTheme.bodyLarge?.copyWith(
                                     color: Colors.white70,
                                   ),
@@ -1662,7 +1749,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
     final scheduleLabel = _formatEntrySchedule(entry);
     final hasSchedule = scheduleLabel.isNotEmpty;
-    final channelSummary = channels.isNotEmpty
+    final channelSummary = channels.length == 1
+        ? channels.first.label.trim().isNotEmpty
+            ? channels.first.label.trim()
+            : 'Canale'
+        : channels.length > 1
         ? '${channels.length} canali'
         : (entry.url.isNotEmpty ? 'Streaming disponibile' : null);
 
@@ -1834,6 +1925,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return '$day/$month $hour:$minute';
   }
 
+  String _formatItalianDate(DateTime dateTime) {
+    final weekday = _weekdayLabels[dateTime.weekday % 7];
+    final month = _monthLabels[dateTime.month - 1];
+    return '$weekday ${dateTime.day} $month';
+  }
+
   String _formatEntrySchedule(_VideoEntry entry) {
     final dayLabel = entry.dayLabel?.trim();
     final eventTime = entry.eventTime?.trim();
@@ -1844,6 +1941,28 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return dayLabel;
     }
     return eventTime ?? '';
+  }
+
+  Iterable<String> _entryLanguages(_VideoEntry entry) {
+    final collected = <String>{};
+
+    if (entry.language != null && entry.language!.trim().isNotEmpty) {
+      final parts = entry.language!
+          .split(',')
+          .map((String value) => value.trim())
+          .where((String value) =>
+              value.isNotEmpty && value != 'Lingua non indicata');
+      collected.addAll(parts);
+    }
+
+    for (final channel in entry.channels) {
+      final language = channel.language.trim();
+      if (language.isNotEmpty && language != 'Lingua non indicata') {
+        collected.add(language);
+      }
+    }
+
+    return collected;
   }
 
   IconData _sportIcon(String sportLabel) {
@@ -2421,7 +2540,7 @@ class _ChannelButton extends StatelessWidget {
 class _SectionCard extends StatelessWidget {
   const _SectionCard({
     required this.title,
-    required this.subtitle,
+    this.subtitle = '',
     required this.child,
   });
 
@@ -2445,14 +2564,17 @@ class _SectionCard extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: Colors.white70,
+            if (subtitle.trim().isNotEmpty) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  color: Colors.white70,
+                ),
               ),
-            ),
-            const SizedBox(height: 18),
+              const SizedBox(height: 18),
+            ] else
+              const SizedBox(height: 16),
             child,
           ],
         ),
