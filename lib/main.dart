@@ -573,20 +573,24 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
   }
 
-  Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromSource(String sourceUrl) async {
+  Future<(String, List<_VideoEntry>, DateTime?)> _loadEntriesFromSource(
+    String sourceUrl,
+  ) async {
     final uri = Uri.tryParse(sourceUrl);
     if (uri == null) {
       throw const FormatException('URL sorgente non valido.');
     }
 
-    final looksLikePlainText = uri.path.toLowerCase().endsWith('.txt');
+    final looksLikePlainText = uri.path.toLowerCase().endsWith('.txt') ||
+        (uri.host.toLowerCase() == 'sportsonline.st' &&
+            (uri.path.isEmpty || uri.path == '/'));
     if (looksLikePlainText) {
       return _loadEntriesFromPlainTextSource(uri);
     }
 
     final links =
         (await _extractLinksFromUrl(sourceUrl)).where(_isPhpUrl).toList();
-    return (<_VideoEntry>[
+    return (sourceUrl, <_VideoEntry>[
       for (var i = 0; i < links.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
@@ -599,7 +603,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     ], null);
   }
 
-  Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(Uri uri) async {
+  Future<(String, List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(
+    Uri uri,
+  ) async {
     final client = _createHttpClient();
     final response = await client.get(uri);
     client.close();
@@ -611,9 +617,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       );
     }
 
+    final resolvedSourceUrl = response.request?.url.toString() ?? uri.toString();
     final lastUpdate = _parseLastUpdateFromText(response.body);
     final events = _parsePlainTextSchedule(response.body);
-    return (<_VideoEntry>[
+    return (resolvedSourceUrl, <_VideoEntry>[
       for (var i = 0; i < events.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
@@ -1074,10 +1081,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     try {
-      final (importedEntries, parsedLastUpdate) = await _loadEntriesFromSource(sourceUrl);
+      final (resolvedSourceUrl, importedEntries, parsedLastUpdate) =
+          await _loadEntriesFromSource(sourceUrl);
 
       final updatedList = list.copyWith(
         entries: importedEntries,
+        sourceUrl: resolvedSourceUrl,
         updatedAt: parsedLastUpdate ?? DateTime.now(),
       );
 
