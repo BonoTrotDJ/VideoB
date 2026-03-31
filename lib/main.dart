@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1458,13 +1459,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                           ),
                                         ),
                                       ),
+                                      _buildEntryGrid(selectedList, group.value),
                                     ];
-                                    widgets.addAll(
-                                      group.value.map(
-                                        (_VideoEntry entry) => _buildEntryTile(
-                                            selectedList, entry),
-                                      ),
-                                    );
                                     return widgets;
                                   }).toList(),
                                 ),
@@ -1625,6 +1621,36 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     );
   }
 
+  Widget _buildEntryGrid(_VideoList list, List<_VideoEntry> entries) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        const spacing = 14.0;
+        final maxWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.of(context).size.width;
+        final columnCount = math.max(1, (maxWidth / 270).floor());
+        final cardSize =
+            (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 14),
+          child: Wrap(
+            spacing: spacing,
+            runSpacing: spacing,
+            children: entries
+                .map(
+                  (_VideoEntry entry) => SizedBox(
+                    width: cardSize,
+                    child: _buildEntryTile(list, entry),
+                  ),
+                )
+                .toList(),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildEntryTile(_VideoList list, _VideoEntry entry) {
     final sportBg = _sportBackground(entry.sportLabel);
     final isFocused =
@@ -1634,32 +1660,37 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         : Colors.white.withValues(alpha: 0.10);
     final channels =
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
+    final scheduleLabel = _formatEntrySchedule(entry);
+    final hasSchedule = scheduleLabel.isNotEmpty;
+    final channelSummary = channels.isNotEmpty
+        ? '${channels.length} canali'
+        : (entry.url.isNotEmpty ? 'Streaming disponibile' : null);
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Focus(
-        onFocusChange: (bool hasFocus) {
-          if (!mounted) return;
-          setState(() {
-            if (hasFocus) {
-              _focusedEntryId = entry.id;
-            } else if (_focusedEntryId == entry.id) {
-              _focusedEntryId = null;
-            }
-          });
-        },
-        onKeyEvent: (FocusNode node, KeyEvent event) {
-          if (event is KeyDownEvent &&
-              (event.logicalKey == LogicalKeyboardKey.enter ||
-               event.logicalKey == LogicalKeyboardKey.select ||
-               event.logicalKey == LogicalKeyboardKey.gameButtonA)) {
-            _openEntryWithChannelPicker(entry);
-            return KeyEventResult.handled;
+    return Focus(
+      onFocusChange: (bool hasFocus) {
+        if (!mounted) return;
+        setState(() {
+          if (hasFocus) {
+            _focusedEntryId = entry.id;
+          } else if (_focusedEntryId == entry.id) {
+            _focusedEntryId = null;
           }
-          return KeyEventResult.ignored;
-        },
-        child: GestureDetector(
-          onTap: () => _openEntryWithChannelPicker(entry),
+        });
+      },
+      onKeyEvent: (FocusNode node, KeyEvent event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+             event.logicalKey == LogicalKeyboardKey.select ||
+             event.logicalKey == LogicalKeyboardKey.gameButtonA)) {
+          _openEntryWithChannelPicker(entry);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: GestureDetector(
+        onTap: () => _openEntryWithChannelPicker(entry),
+        child: AspectRatio(
+          aspectRatio: 1,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             decoration: BoxDecoration(
@@ -1674,49 +1705,60 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                // Time + sport row
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    if (entry.eventTime != null || entry.dayLabel != null) ...<Widget>[
-                      Text(
-                        _formatEntrySchedule(entry),
-                        style: const TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -1,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                    ],
-                    if (entry.sportLabel != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(
-                              _sportIcon(entry.sportLabel!),
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                            const SizedBox(width: 6),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          if (hasSchedule)
                             Text(
-                              entry.sportLabel!,
+                              scheduleLabel,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                fontSize: 13,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.8,
                                 color: Colors.white,
                               ),
                             ),
+                          if (entry.sportLabel != null) ...<Widget>[
+                            const SizedBox(height: 10),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.10),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    _sportIcon(entry.sportLabel!),
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      entry.sportLabel!,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ],
-                        ),
+                        ],
                       ),
-                    const Spacer(),
+                    ),
                     if (list.sourceType == _VideoListSourceType.manual)
                       IconButton(
                         tooltip: 'Elimina',
@@ -1729,53 +1771,53 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                // Title
+                const SizedBox(height: 14),
                 Text(
                   entry.name,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 17,
+                    fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
                     height: 1.25,
                   ),
                 ),
-                // Language
                 if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   Text(
                     'Lingue: ${entry.language}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13,
                       color: Colors.white.withValues(alpha: 0.65),
                     ),
                   ),
                 ],
-                // Channels
-                if (channels.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: channels.map((_VideoChannel ch) {
-                      return _ChannelButton(
-                        label: '${ch.label} • ${ch.language}',
-                        onTap: () => _openUrl(
-                          ch.url,
-                          entryId: entry.id,
-                          entryName: entry.name,
-                        ),
-                      );
-                    }).toList(),
+                const Spacer(),
+                if (channelSummary != null)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Text(
+                      channelSummary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
                   ),
-                ] else if (entry.url.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 12),
-                  _ChannelButton(
-                    label: entry.url,
-                    onTap: () => _openUrl(entry.url,
-                        entryId: entry.id, entryName: entry.name),
-                  ),
-                ],
               ],
             ),
           ),
