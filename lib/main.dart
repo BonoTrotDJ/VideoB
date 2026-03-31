@@ -1099,9 +1099,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             .map((_VideoList item) => item.id == list.id ? updatedList : item)
             .toList();
         _status = importedEntries.isEmpty
-            ? 'Nessun link trovato in "${list.name}".'
+            ? 'errore connessione, provare ad attivare dns 1.1.1.1'
             : 'Lista "${list.name}" aggiornata con ${importedEntries.length} link.';
       });
+      if (importedEntries.isEmpty) {
+        _showToastStatus('errore connessione, provare ad attivare dns 1.1.1.1');
+      }
 
       await _persistLists();
     } on PlatformException catch (error) {
@@ -1110,17 +1113,19 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
       setState(() {
         _status = showConnectionErrorOnly
-            ? 'errore connessione'
-            : (error.message ?? 'errore connessione');
+            ? 'errore connessione, provare ad attivare dns 1.1.1.1'
+            : 'errore connessione, provare ad attivare dns 1.1.1.1';
       });
+      _showToastStatus('errore connessione, provare ad attivare dns 1.1.1.1');
       _requestRefreshImportedListFocus();
     } on Exception {
       if (!mounted) {
         return;
       }
       setState(() {
-        _status = 'errore connessione';
+        _status = 'errore connessione, provare ad attivare dns 1.1.1.1';
       });
+      _showToastStatus('errore connessione, provare ad attivare dns 1.1.1.1');
       _requestRefreshImportedListFocus();
     } finally {
       if (mounted) {
@@ -1138,6 +1143,23 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return '$host ${index + 1}';
     }
     return 'Link ${index + 1}';
+  }
+
+  void _showToastStatus(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+          margin: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        ),
+      );
   }
 
   Future<bool> _waitForDnsVpnState(bool expectedValue) async {
