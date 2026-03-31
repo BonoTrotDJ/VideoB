@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart' as http_io;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -141,7 +143,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   String? _focusedEntryId;
   bool _isLoading = true;
   bool _isBusy = false;
+  bool _dohEnabled = false;
   String? _status;
+
+  static const String _dohKey = 'doh_enabled';
 
   _VideoList? get _selectedList {
     for (final list in _videoLists) {
@@ -239,6 +244,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Future<void> _loadLists() async {
     final preferences = await SharedPreferences.getInstance();
+    _dohEnabled = preferences.getBool(_dohKey) ?? false;
     var rawLists = preferences.getString(_listsKey);
     var selectedListId = preferences.getString(_selectedListKey);
 
@@ -476,6 +482,55 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .toList();
   }
 
+  http.Client _createHttpClient() {
+    if (!_dohEnabled) return http.Client();
+    final ioClient = HttpClient();
+    ioClient.connectionFactory =
+        (Uri uri, String? proxyHost, int? proxyPort) async {
+      final hostname = uri.host;
+      final port =
+          uri.port == 0 ? (uri.scheme == 'https' ? 443 : 80) : uri.port;
+      String connectHost = hostname;
+      if (!RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(hostname)) {
+        connectHost = await _resolveWithDoh(hostname) ?? hostname;
+      }
+      // Return a plain Socket connected to the resolved IP.
+      // HttpClient handles TLS upgrade for HTTPS using uri.host for SNI.
+      final socket = await Socket.connect(connectHost, port);
+      return ConnectionTask.fromSocket(Future.value(socket), () {});
+    };
+    return http_io.IOClient(ioClient);
+  }
+
+  Future<String?> _resolveWithDoh(String hostname) async {
+    try {
+      final uri = Uri.parse(
+          'https://1.1.1.1/dns-query?name=${Uri.encodeComponent(hostname)}&type=A');
+      final client = HttpClient();
+      final request = await client.getUrl(uri);
+      request.headers.set('accept', 'application/dns-json');
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close();
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final answers = json['Answer'] as List<dynamic>?;
+      if (answers != null) {
+        for (final answer in answers) {
+          if ((answer as Map<String, dynamic>)['type'] == 1) {
+            return answer['data'] as String?;
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _setDohEnabled(bool value) async {
+    setState(() => _dohEnabled = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_dohKey, value);
+  }
+
   Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromSource(String sourceUrl) async {
     final uri = Uri.tryParse(sourceUrl);
     if (uri == null) {
@@ -503,7 +558,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Future<(List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(Uri uri) async {
-    final response = await http.get(uri);
+    final client = _createHttpClient();
+    final response = await client.get(uri);
+    client.close();
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw PlatformException(
         code: 'plain_text_fetch_failed',
@@ -1159,7 +1216,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
         );
         if (shouldExit == true && context.mounted) {
-          Navigator.of(context).pop();
+          if (_dohEnabled) await _setDohEnabled(false);
+          if (context.mounted) Navigator.of(context).pop();
         }
       },
       child: Scaffold(
@@ -1447,6 +1505,15 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     );
                   },
                 ),
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                secondary: const Icon(Icons.dns_rounded),
+                title: const Text('DNS 1.1.1.1 (Cloudflare)'),
+                subtitle: Text(_dohEnabled ? 'Attivo' : 'Disattivo'),
+                value: _dohEnabled,
+                onChanged: (bool val) => _setDohEnabled(val),
               ),
               const Divider(height: 1),
               InkWell(
