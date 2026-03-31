@@ -247,23 +247,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _dohEnabled = preferences.getBool(_dohKey) ?? false;
     var rawLists = preferences.getString(_listsKey);
     var selectedListId = preferences.getString(_selectedListKey);
+    var parsedLists = _parseStoredLists(rawLists);
 
-    if (rawLists == null || rawLists.isEmpty) {
+    if (parsedLists.isEmpty) {
       final backupPayload = await _loadBackupPayload();
       if (backupPayload != null) {
         rawLists = backupPayload.rawLists;
         selectedListId = backupPayload.selectedListId;
-      }
-    }
-
-    List<_VideoList> parsedLists = <_VideoList>[];
-    if (rawLists != null && rawLists.isNotEmpty) {
-      final decoded = jsonDecode(rawLists);
-      if (decoded is List<dynamic>) {
-        parsedLists = decoded
-            .whereType<Map<String, dynamic>>()
-            .map(_VideoList.fromJson)
-            .toList();
+        parsedLists = _parseStoredLists(rawLists);
       }
     }
 
@@ -295,6 +286,28 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     });
 
     await _persistLists();
+  }
+
+  List<_VideoList> _parseStoredLists(String? rawLists) {
+    if (rawLists == null || rawLists.isEmpty) {
+      return <_VideoList>[];
+    }
+
+    try {
+      final decoded = jsonDecode(rawLists);
+      if (decoded is! List<dynamic>) {
+        return <_VideoList>[];
+      }
+
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(_VideoList.fromJson)
+          .toList();
+    } on FormatException {
+      return <_VideoList>[];
+    } on TypeError {
+      return <_VideoList>[];
+    }
   }
 
   Future<void> _persistLists() async {
@@ -950,6 +963,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             child: const Text('Annulla'),
           ),
           FilledButton(
+            autofocus: true,
             onPressed: () => Navigator.of(ctx).pop(true),
             style: ButtonStyle(
               backgroundColor: WidgetStateProperty.resolveWith<Color?>(
@@ -1199,6 +1213,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           _scaffoldKey.currentState?.closeDrawer();
           return;
         }
+        if (_selectedList?.sourceType == _VideoListSourceType.manual) {
+          _scaffoldKey.currentState?.openDrawer();
+          return;
+        }
         final shouldExit = await showDialog<bool>(
           context: context,
           builder: (BuildContext ctx) => AlertDialog(
@@ -1209,15 +1227,33 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 child: const Text('Annulla'),
               ),
               FilledButton(
+                autofocus: true,
                 onPressed: () => Navigator.of(ctx).pop(true),
+                style: ButtonStyle(
+                  backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.focused)) return Colors.white;
+                      return null;
+                    },
+                  ),
+                  foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                    (Set<WidgetState> states) {
+                      if (states.contains(WidgetState.focused)) return const Color(0xFF07111F);
+                      return null;
+                    },
+                  ),
+                ),
                 child: const Text('Esci'),
               ),
             ],
           ),
         );
-        if (shouldExit == true && context.mounted) {
-          if (_dohEnabled) await _setDohEnabled(false);
-          if (context.mounted) Navigator.of(context).pop();
+        if (shouldExit == true) {
+          if (_dohEnabled) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool(_dohKey, false);
+          }
+          SystemNavigator.pop();
         }
       },
       child: Scaffold(
@@ -1737,67 +1773,103 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _SystemEditorField(
-          labelText: 'Nome voce',
-          hintText: 'Es. Sky Sport 1',
-          value: _entryNameController.text,
-          onTap: () => _editWithSystemEditor(
-            controller: _entryNameController,
-            title: 'Nome voce',
-            hint: 'Es. Sky Sport 1',
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(1),
+          child: _SystemEditorField(
+            autofocus: true,
+            labelText: 'Nome voce',
+            hintText: 'Es. Sky Sport 1',
+            value: _entryNameController.text,
+            onTap: () => _editWithSystemEditor(
+              controller: _entryNameController,
+              title: 'Nome voce',
+              hint: 'Es. Sky Sport 1',
+            ),
           ),
         ),
         const SizedBox(height: 14),
-        _SystemEditorField(
-          labelText: 'URL video',
-          hintText: 'https://...',
-          value: _entryUrlController.text,
-          onTap: () => _editWithSystemEditor(
-            controller: _entryUrlController,
-            title: 'URL video',
-            hint: 'https://...',
-            isUrl: true,
-          ),
-          trailing: IconButton(
-            tooltip: 'Incolla',
-            onPressed: () async {
-              final clipboardData = await Clipboard.getData(
-                Clipboard.kTextPlain,
-              );
-              final pastedText = clipboardData?.text?.trim() ?? '';
-              if (pastedText.isEmpty) {
-                return;
-              }
+        FocusTraversalOrder(
+          order: const NumericFocusOrder(2),
+          child: _SystemEditorField(
+            labelText: 'URL video',
+            hintText: 'https://...',
+            value: _entryUrlController.text,
+            onTap: () => _editWithSystemEditor(
+              controller: _entryUrlController,
+              title: 'URL video',
+              hint: 'https://...',
+              isUrl: true,
+            ),
+            trailing: IconButton(
+              tooltip: 'Incolla',
+              onPressed: () async {
+                final clipboardData = await Clipboard.getData(
+                  Clipboard.kTextPlain,
+                );
+                final pastedText = clipboardData?.text?.trim() ?? '';
+                if (pastedText.isEmpty) {
+                  return;
+                }
 
-              _entryUrlController.text = pastedText;
-              _entryUrlController.selection = TextSelection.collapsed(
-                offset: pastedText.length,
-              );
-              setState(() {});
-            },
-            icon: const Icon(Icons.content_paste_go_rounded),
+                _entryUrlController.text = pastedText;
+                _entryUrlController.selection = TextSelection.collapsed(
+                  offset: pastedText.length,
+                );
+                setState(() {});
+              },
+              icon: const Icon(Icons.content_paste_go_rounded),
+            ),
           ),
         ),
         const SizedBox(height: 18),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: <Widget>[
-            FilledButton.icon(
-              onPressed: _saveManualEntry,
-              icon: const Icon(Icons.save_rounded),
-              label: Text(
-                  _editingEntryId == null ? 'Aggiungi Voce' : 'Aggiorna Voce'),
-            ),
-            FilledButton.tonal(
-              onPressed: () => _openUrl(_entryUrlController.text),
-              child: const Text('Apri URL'),
-            ),
-            OutlinedButton(
-              onPressed: _clearEntryForm,
-              child: const Text('Pulisci'),
-            ),
-          ],
+        FocusTraversalGroup(
+          policy: OrderedTraversalPolicy(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  const Spacer(),
+                  FocusTraversalOrder(
+                    order: const NumericFocusOrder(3),
+                    child: FilledButton.icon(
+                      onPressed: _saveManualEntry,
+                      style: ButtonStyle(
+                        backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+                          (Set<WidgetState> states) {
+                            if (states.contains(WidgetState.focused)) {
+                              return Colors.white;
+                            }
+                            return null;
+                          },
+                        ),
+                        foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                          (Set<WidgetState> states) {
+                            if (states.contains(WidgetState.focused)) {
+                              return const Color(0xFF07111F);
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                      icon: const Icon(Icons.save_rounded),
+                      label: Text(
+                        _editingEntryId == null ? 'Aggiungi Voce' : 'Aggiorna Voce',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              FocusTraversalOrder(
+                order: const NumericFocusOrder(4),
+                child: FilledButton.tonal(
+                  onPressed: () => _openUrl(_entryUrlController.text),
+                  child: const Text('Apri URL'),
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -1831,7 +1903,61 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 .map(
                   (_VideoEntry entry) => SizedBox(
                     width: cardSize,
-                    child: _buildEntryTile(list, entry),
+                    child: Column(
+                      children: <Widget>[
+                        AspectRatio(
+                          aspectRatio: 1,
+                          child: _buildEntryTile(list, entry),
+                        ),
+                        if (list.sourceType == _VideoListSourceType.manual)
+                          Focus(
+                            child: Builder(
+                              builder: (BuildContext ctx) {
+                                final hasFocus = Focus.of(ctx).hasFocus;
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  margin: const EdgeInsets.only(top: 6),
+                                  decoration: BoxDecoration(
+                                    color: hasFocus
+                                        ? Colors.white
+                                        : Colors.white.withValues(alpha: 0.06),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: () => _deleteEntry(entry),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 8),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: <Widget>[
+                                          Icon(
+                                            Icons.delete_outline_rounded,
+                                            size: 18,
+                                            color: hasFocus
+                                                ? const Color(0xFFFF4444)
+                                                : Colors.white54,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Elimina',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: hasFocus
+                                                  ? const Color(0xFFFF4444)
+                                                  : Colors.white54,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 )
                 .toList(),
@@ -1883,9 +2009,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       },
       child: GestureDetector(
         onTap: () => _openEntryWithChannelPicker(entry),
-        child: AspectRatio(
-          aspectRatio: 1,
-          child: AnimatedContainer(
+        child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             decoration: BoxDecoration(
               color: sportBg,
@@ -1953,16 +2077,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         ],
                       ),
                     ),
-                    if (list.sourceType == _VideoListSourceType.manual)
-                      IconButton(
-                        tooltip: 'Elimina',
-                        onPressed: () => _deleteEntry(entry),
-                        icon: const Icon(
-                          Icons.delete_outline_rounded,
-                          color: Colors.white54,
-                          size: 20,
-                        ),
-                      ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -2016,7 +2130,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             ),
           ),
         ),
-      ),
     );
   }
 
@@ -2419,6 +2532,7 @@ class _CreateListPageState extends State<_CreateListPage> {
                         ),
                         const SizedBox(height: 20),
                         _SystemEditorField(
+                          autofocus: true,
                           labelText: 'Nome lista',
                           hintText: 'Es. Calcio, Film, Sport',
                           value: _nameController.text,
@@ -2485,6 +2599,20 @@ class _CreateListPageState extends State<_CreateListPage> {
                             const SizedBox(width: 12),
                             FilledButton(
                               onPressed: _submit,
+                              style: ButtonStyle(
+                                backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+                                  (Set<WidgetState> states) {
+                                    if (states.contains(WidgetState.focused)) return Colors.white;
+                                    return null;
+                                  },
+                                ),
+                                foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+                                  (Set<WidgetState> states) {
+                                    if (states.contains(WidgetState.focused)) return const Color(0xFF07111F);
+                                    return null;
+                                  },
+                                ),
+                              ),
                               child: const Text('Crea'),
                             ),
                           ],
@@ -2578,6 +2706,7 @@ class _SystemEditorField extends StatelessWidget {
     required this.value,
     required this.onTap,
     this.trailing,
+    this.autofocus = false,
   });
 
   final String labelText;
@@ -2585,12 +2714,14 @@ class _SystemEditorField extends StatelessWidget {
   final String value;
   final VoidCallback onTap;
   final Widget? trailing;
+  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     final hasValue = value.trim().isNotEmpty;
 
     return InkWell(
+      autofocus: autofocus,
       borderRadius: BorderRadius.circular(20),
       onTap: onTap,
       child: InputDecorator(
@@ -2695,4 +2826,3 @@ class _SectionCard extends StatelessWidget {
     );
   }
 }
-
