@@ -14,6 +14,7 @@ L'app permette di:
 - importare liste da URL testuali come `prog.txt`
 - aggiornare una lista importata quando vuoi rileggendo la sorgente
 - mostrare metadati utili per ogni evento come giorno, ora, lingua e sport
+- passare alla modalità `Link` per vedere solo i link trovati, senza programmazione
 - aprire il link direttamente nel player interno
 
 ## Uso
@@ -24,6 +25,12 @@ Nel menu laterale puoi creare due tipi di lista:
 - `Da URL`: inserisci un URL sorgente e lascia che Video BonoTrot importi i link compatibili
 
 Per le liste importate, puoi premere `Aggiorna Lista` in qualsiasi momento per ricaricare i contenuti dalla sorgente.
+
+Per le liste importate puoi anche usare il pulsante `Link`:
+
+- mostra solo i link univoci trovati
+- nasconde la programmazione per giorno e orario
+- mantiene lingua e nome canale/link in una vista più compatta
 
 Esempio di sorgente supportata:
 
