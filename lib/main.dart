@@ -100,7 +100,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _selectedListKey = 'selected_video_list_v2';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.0+1';
+  static const _appVersion = '1.0.1+2';
+  static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
     'Lunedì',
@@ -143,6 +144,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isLoading = true;
   bool _isBusy = false;
   bool _dohEnabled = false;
+  bool _isNowMode = false;
+  bool _isScanningNowMode = false;
+  int _nowScanCompleted = 0;
+  int _nowScanTotal = 0;
   String? _status;
 
   static const String _dohKey = 'doh_enabled';
@@ -224,6 +229,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .map((String day) =>
             MapEntry<String, List<_VideoEntry>>(day, grouped[day]!))
         .toList();
+  }
+
+  List<_VideoEntry> get _uniqueNowModeEntries {
+    final uniqueEntries = <_VideoEntry>[];
+    final seenUrls = <String>{};
+
+    for (final entry in _filteredEntries) {
+      final normalizedUrl = _normalizedEntryPreviewSourceUrl(entry);
+      if (normalizedUrl.isEmpty || seenUrls.add(normalizedUrl)) {
+        uniqueEntries.add(entry);
+      }
+    }
+
+    return uniqueEntries;
   }
 
   @override
@@ -384,6 +403,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       _editingEntryId = null;
       _entryNameController.clear();
       _entryUrlController.clear();
+      _isNowMode = false;
+      _isScanningNowMode = false;
+      _nowScanCompleted = 0;
+      _nowScanTotal = 0;
       _status = null;
     });
     _persistLists();
@@ -950,6 +973,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     setState(() {
       _videoLists = <_VideoList>[..._videoLists, newList];
       _selectedListId = newList.id;
+      _isNowMode = false;
+      _isScanningNowMode = false;
+      _nowScanCompleted = 0;
+      _nowScanTotal = 0;
       _status = 'Lista "$name" creata.';
       _editingEntryId = null;
       _entryNameController.clear();
@@ -974,6 +1001,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     if (existingList != null) {
       setState(() {
         _selectedListId = existingList.id;
+        _isNowMode = false;
+        _isScanningNowMode = false;
+        _nowScanCompleted = 0;
+        _nowScanTotal = 0;
         _status = 'Lista "$_sportListName" selezionata.';
       });
       if (mounted) {
@@ -1049,6 +1080,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     setState(() {
       _videoLists = updatedLists;
       _selectedListId = nextSelectedId;
+      _isNowMode = false;
+      _isScanningNowMode = false;
+      _nowScanCompleted = 0;
+      _nowScanTotal = 0;
       _editingEntryId = null;
       _entryNameController.clear();
       _entryUrlController.clear();
@@ -1072,6 +1107,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     final sourceUrl = list.sourceUrl?.trim() ?? '';
+    final shouldRestoreNowMode = _isNowMode || _isScanningNowMode;
     if (sourceUrl.isEmpty) {
       setState(() {
         _status = 'Questa lista non ha un URL sorgente valido.';
@@ -1081,6 +1117,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     setState(() {
       _isBusy = true;
+      _isNowMode = false;
+      _isScanningNowMode = false;
+      _nowScanCompleted = 0;
+      _nowScanTotal = 0;
       _status = 'Aggiornamento lista "${list.name}" in corso...';
     });
     if (keepFocusOnRefresh) {
@@ -1114,6 +1154,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
 
       await _persistLists();
+
+      if (shouldRestoreNowMode && importedEntries.isNotEmpty && mounted) {
+        await _activateNowMode(updatedList);
+      }
     } on PlatformException catch (error) {
       if (!mounted) {
         return;
@@ -1394,8 +1438,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Filtro sport',
+                        helperText: _isNowMode
+                            ? 'Disabilitato in modalità Link'
+                            : null,
                       ),
                       items: <DropdownMenuItem<String>>[
                         DropdownMenuItem<String>(
@@ -1421,7 +1468,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                           ),
                         ),
                       ],
-                      onChanged: (String? value) {
+                      onChanged: _isNowMode
+                          ? null
+                          : (String? value) {
                         setState(() {
                           _selectedSportFilter =
                               value == null || value.isEmpty ? null : value;
@@ -1674,6 +1723,21 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         color: Colors.white70,
                       ),
                     ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Open source',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    SelectableText(
+                      _projectUrl,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1740,6 +1804,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                 const SizedBox(height: 18),
                               ],
                               _buildListMeta(theme, selectedList),
+                              if (selectedList.sourceType ==
+                                      _VideoListSourceType.imported &&
+                                  (_isNowMode || _isScanningNowMode)) ...<Widget>[
+                                const SizedBox(height: 18),
+                                _buildNowModeProgress(theme),
+                              ],
                               const SizedBox(height: 18),
                               if (_activeEntryName != null) ...<Widget>[
                                 Container(
@@ -1790,38 +1860,42 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                             ),
                           )
                         else
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: _groupedFilteredEntries.expand(
-                              (MapEntry<String, List<_VideoEntry>> group) {
-                                return <Widget>[
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      top: 16,
-                                      bottom: 10,
-                                    ),
-                                    child: Row(
-                                      children: <Widget>[
-                                        const Icon(
-                                          Icons.calendar_today_rounded,
-                                          size: 20,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          group.key,
-                                          style: theme.textTheme.headlineSmall
-                                              ?.copyWith(
-                                            fontWeight: FontWeight.w700,
+                          selectedList.sourceType ==
+                                      _VideoListSourceType.imported &&
+                                  _isNowMode
+                              ? _buildEntryGrid(selectedList, _uniqueNowModeEntries)
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: _groupedFilteredEntries.expand(
+                                    (MapEntry<String, List<_VideoEntry>> group) {
+                                      return <Widget>[
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 16,
+                                            bottom: 10,
+                                          ),
+                                          child: Row(
+                                            children: <Widget>[
+                                              const Icon(
+                                                Icons.calendar_today_rounded,
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                group.key,
+                                                style: theme.textTheme.headlineSmall
+                                                    ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
-                                      ],
-                                    ),
-                                  ),
-                                  _buildEntryGrid(selectedList, group.value),
-                                ];
-                              },
-                            ).toList(),
-                          ),
+                                        _buildEntryGrid(selectedList, group.value),
+                                      ];
+                                    },
+                                  ).toList(),
+                                ),
                       ],
                     ),
                   ),
@@ -1853,6 +1927,39 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             label: Text(
               'Ultimo aggiornamento: ${_formatItalianDateTime(selectedList.updatedAt!)}',
             ),
+          ),
+        if (selectedList.sourceType == _VideoListSourceType.imported)
+          ActionChip(
+            avatar: _isScanningNowMode
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    _isNowMode && !_isScanningNowMode
+                        ? Icons.event_note_rounded
+                        : Icons.flash_on_rounded,
+                    size: 18,
+                  ),
+            label: Text(
+              _isNowMode && !_isScanningNowMode
+                  ? 'Modalità Programmazione'
+                  : 'Link',
+            ),
+            onPressed: _isBusy
+                ? null
+                : () {
+                    if (_isNowMode && !_isScanningNowMode) {
+                      setState(() {
+                        _isNowMode = false;
+                        _isScanningNowMode = false;
+                        _status = 'Modalità programmazione attiva.';
+                      });
+                      return;
+                    }
+                    _activateNowMode(selectedList);
+                  },
           ),
         if (selectedList.sourceType == _VideoListSourceType.imported)
           ActionChip(
@@ -1986,6 +2093,147 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     );
   }
 
+  Future<void> _activateNowMode(_VideoList list) async {
+    final entries = _uniqueNowModeEntries;
+    setState(() {
+      _isNowMode = true;
+      _isScanningNowMode = true;
+      _nowScanCompleted = 0;
+      _nowScanTotal = entries.length;
+      _status = 'Preparazione modalità Link...';
+    });
+
+    for (final _ in entries) {
+      if (!mounted || _selectedListId != list.id || !_isNowMode) {
+        return;
+      }
+
+      if (!mounted || _selectedListId != list.id || !_isNowMode) {
+        return;
+      }
+
+      setState(() {
+        _nowScanCompleted += 1;
+      });
+    }
+
+    if (!mounted || _selectedListId != list.id) {
+      return;
+    }
+
+    setState(() {
+      _isScanningNowMode = false;
+      _status = _nowScanTotal == 0
+          ? 'Nessun link da analizzare.'
+          : 'Modalità Link pronta.';
+    });
+  }
+
+  String _entryPreviewSourceUrl(_VideoEntry entry) {
+    if (entry.channels.isNotEmpty) {
+      final primary = entry.channels.first.url.trim();
+      if (primary.isNotEmpty) {
+        return primary;
+      }
+    }
+    return entry.url.trim();
+  }
+
+  String _normalizedEntryPreviewSourceUrl(_VideoEntry entry) {
+    return _entryPreviewSourceUrl(entry).trim().toLowerCase();
+  }
+
+  String _compactEntryLinkLabel(_VideoEntry entry) {
+    final url = _entryPreviewSourceUrl(entry);
+    final uri = Uri.tryParse(url);
+    if (uri != null) {
+      final host = uri.host.trim();
+      final segments = uri.pathSegments.where((String part) => part.isNotEmpty);
+      final lastSegment = segments.isEmpty ? '' : segments.last;
+      if (host.isNotEmpty && lastSegment.isNotEmpty) {
+        return '$host/.../$lastSegment';
+      }
+      if (host.isNotEmpty) {
+        return host;
+      }
+    }
+
+    if (url.length <= 42) {
+      return url;
+    }
+    return '${url.substring(0, 18)}...${url.substring(url.length - 18)}';
+  }
+
+  String _nowModeChannelLabel(_VideoEntry entry) {
+    final channels =
+        entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
+    if (channels.isNotEmpty) {
+      final label = channels.first.label.trim();
+      if (label.isNotEmpty) {
+        return label;
+      }
+    }
+
+    final fallback = _channelLabel(_entryPreviewSourceUrl(entry)).trim();
+    if (fallback.isNotEmpty) {
+      return fallback;
+    }
+
+    return _compactEntryLinkLabel(entry);
+  }
+
+  Widget _buildNowModeProgress(ThemeData theme) {
+    final total = _nowScanTotal == 0 ? 1 : _nowScanTotal;
+    final progress = _nowScanCompleted / total;
+    final label = _isScanningNowMode
+        ? 'Scansione link: $_nowScanCompleted / $_nowScanTotal'
+        : 'Link analizzati: $_nowScanCompleted / $_nowScanTotal';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(
+                _isScanningNowMode
+                    ? Icons.downloading_rounded
+                    : Icons.image_rounded,
+                size: 18,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress.clamp(0, 1).toDouble(),
+              minHeight: 10,
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEntryGrid(_VideoList list, List<_VideoEntry> entries) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
@@ -1996,6 +2244,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         final columnCount = math.max(1, (maxWidth / 270).floor());
         final cardSize =
             (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
+        final tileAspectRatio =
+            list.sourceType == _VideoListSourceType.imported && _isNowMode
+                ? 16 / 9
+                : 1.0;
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 14),
@@ -2009,7 +2261,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     child: Column(
                       children: <Widget>[
                         AspectRatio(
-                          aspectRatio: 1,
+                          aspectRatio: tileAspectRatio,
                           child: _buildEntryTile(list, entry),
                         ),
                         if (list.sourceType == _VideoListSourceType.manual)
@@ -2071,6 +2323,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Widget _buildEntryTile(_VideoList list, _VideoEntry entry) {
+    if (list.sourceType == _VideoListSourceType.imported && _isNowMode) {
+      return _buildNowModeEntryTile(entry);
+    }
+
     final sportBg = _sportBackground(entry.sportLabel);
     final isFocused =
         _focusedEntryId == entry.id || _activeEntryId == entry.id;
@@ -2251,6 +2507,126 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             ),
           ),
         ),
+    );
+  }
+
+  Widget _buildNowModeEntryTile(_VideoEntry entry) {
+    final isFocused =
+        _focusedEntryId == entry.id || _activeEntryId == entry.id;
+    final languageLabel = entry.language?.trim() ?? '';
+    final borderColor = isFocused
+        ? Colors.white
+        : Colors.white.withValues(alpha: 0.16);
+
+    return Focus(
+      onFocusChange: (bool hasFocus) {
+        if (!mounted) return;
+        setState(() {
+          if (hasFocus) {
+            _focusedEntryId = entry.id;
+          } else if (_focusedEntryId == entry.id) {
+            _focusedEntryId = null;
+          }
+        });
+      },
+      onKeyEvent: (FocusNode node, KeyEvent event) {
+        if (event is KeyDownEvent &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.select ||
+                event.logicalKey == LogicalKeyboardKey.gameButtonA)) {
+          _openEntryWithChannelPicker(entry);
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: GestureDetector(
+        onTap: () => _openEntryWithChannelPicker(entry),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          decoration: BoxDecoration(
+            color: const Color(0xFF154C79),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: borderColor,
+              width: isFocused ? 2 : 1,
+            ),
+          ),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(22),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        Colors.black.withValues(alpha: 0.18),
+                        Colors.black.withValues(alpha: 0.24),
+                        Colors.black.withValues(alpha: 0.82),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (languageLabel.isNotEmpty) ...<Widget>[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.42),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          languageLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.42),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        _nowModeChannelLabel(entry),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
