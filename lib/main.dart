@@ -792,6 +792,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final value = name.toLowerCase();
 
     if (value.contains('world tour')) {
+      if (value.contains('tennis') ||
+          value.contains('atp') ||
+          value.contains('wta') ||
+          value.contains('challenger') ||
+          value.contains('masters')) {
+        return 'Tennis';
+      }
       return 'Golf';
     }
     if (value.contains('grand prix')) {
@@ -2324,7 +2331,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       case 'Basket':
         return const Color(0xFF4A2B16);
       case 'Tennis':
-        return const Color(0xFF244118);
+        return const Color(0xFFC96A4A);
       case 'Golf':
         return const Color(0xFF183B2B);
       case 'Football Americano':
