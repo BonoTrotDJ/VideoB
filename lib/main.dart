@@ -2182,6 +2182,21 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return _compactEntryLinkLabel(entry);
   }
 
+  String _nowModeBackgroundLabel(_VideoEntry entry) {
+    final label = _nowModeChannelLabel(entry).trim();
+    if (label.isEmpty) {
+      return '';
+    }
+
+    final parts = label.split(RegExp(r'[/\s_-]+'));
+    final candidate = parts.isNotEmpty ? parts.last.trim() : label;
+    if (candidate.isNotEmpty) {
+      return candidate.toUpperCase();
+    }
+
+    return label.toUpperCase();
+  }
+
   Widget _buildNowModeProgress(ThemeData theme) {
     final total = _nowScanTotal == 0 ? 1 : _nowScanTotal;
     final progress = _nowScanCompleted / total;
@@ -2514,6 +2529,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final isFocused =
         _focusedEntryId == entry.id || _activeEntryId == entry.id;
     final languageLabel = entry.language?.trim() ?? '';
+    final backgroundLabel = _nowModeBackgroundLabel(entry);
     final borderColor = isFocused
         ? Colors.white
         : Colors.white.withValues(alpha: 0.16);
@@ -2553,6 +2569,29 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           ),
           child: Stack(
             children: <Widget>[
+              if (backgroundLabel.isNotEmpty)
+                Positioned(
+                  right: 10,
+                  top: -6,
+                  bottom: -8,
+                  child: IgnorePointer(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        backgroundLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.clip,
+                        style: TextStyle(
+                          fontSize: 84,
+                          height: 0.95,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -3,
+                          color: Colors.white.withValues(alpha: 0.10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
