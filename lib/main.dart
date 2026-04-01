@@ -2246,7 +2246,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
         final tileAspectRatio =
             list.sourceType == _VideoListSourceType.imported && _isNowMode
-                ? 16 / 9
+                ? 16 / 7
                 : 1.0;
 
         return Padding(
