@@ -2479,8 +2479,14 @@ class _ImportedScheduleAccumulator {
   final String? dayLabel;
   final List<_VideoChannel> channels = <_VideoChannel>[];
   final Set<String> _languages = <String>{};
+  final Set<String> _channelUrls = <String>{};
 
   void addChannel(String url, String label, String language) {
+    final normalizedUrl = url.trim().toLowerCase();
+    if (normalizedUrl.isEmpty || !_channelUrls.add(normalizedUrl)) {
+      return;
+    }
+
     channels.add(_VideoChannel(url: url, label: label, language: language));
     if (language.trim().isNotEmpty &&
         language != 'Lingua non indicata') {
