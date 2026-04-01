@@ -2081,6 +2081,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
     final scheduleLabel = _formatEntrySchedule(entry);
     final hasSchedule = scheduleLabel.isNotEmpty;
+    final backgroundSportIcon =
+        entry.sportLabel != null ? _sportIcon(entry.sportLabel!) : null;
     final channelSummary = channels.length == 1
         ? channels.first.label.trim().isNotEmpty
             ? channels.first.label.trim()
@@ -2123,112 +2125,128 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
               ),
             ),
             padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Stack(
               children: <Widget>[
-                Row(
+                if (backgroundSportIcon != null)
+                  Positioned(
+                    right: -6,
+                    bottom: -10,
+                    child: IgnorePointer(
+                      child: Icon(
+                        backgroundSportIcon,
+                        size: 140,
+                        color: Colors.white.withValues(alpha: 0.10),
+                      ),
+                    ),
+                  ),
+                Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          if (hasSchedule)
-                            Text(
-                              scheduleLabel,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.8,
-                                color: Colors.white,
-                              ),
-                            ),
-                          if (entry.sportLabel != null) ...<Widget>[
-                            const SizedBox(height: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.10),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: <Widget>[
-                                  Icon(
-                                    _sportIcon(entry.sportLabel!),
-                                    size: 16,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              if (hasSchedule)
+                                Text(
+                                  scheduleLabel,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.8,
                                     color: Colors.white,
                                   ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      entry.sportLabel!,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 13,
+                                ),
+                              if (entry.sportLabel != null) ...<Widget>[
+                                const SizedBox(height: 10),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.10),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: <Widget>[
+                                      Icon(
+                                        _sportIcon(entry.sportLabel!),
+                                        size: 16,
                                         color: Colors.white,
                                       ),
-                                    ),
+                                      const SizedBox(width: 6),
+                                      Flexible(
+                                        child: Text(
+                                          entry.sportLabel!,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  entry.name,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                    height: 1.25,
-                  ),
-                ),
-                if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Lingue: ${entry.language}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.white.withValues(alpha: 0.65),
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                if (channelSummary != null)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      channelSummary,
-                      maxLines: 1,
+                    const SizedBox(height: 14),
+                    Text(
+                      entry.name,
+                      maxLines: 4,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
                         color: Colors.white,
+                        height: 1.25,
                       ),
                     ),
-                  ),
+                    if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Lingue: ${entry.language}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.65),
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    if (channelSummary != null)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          channelSummary,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ],
             ),
           ),
