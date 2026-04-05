@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,7 +13,7 @@ void main() {
 }
 
 const String _sportListName = 'Sport';
-const String _sportListSourceUrl = 'https://sito.it/prog.txt';
+const String _sportListSourceUrl = 'https://sportsonline.st';
 const String _sportsDbApiBase = 'https://www.thesportsdb.com/api/v1/json/123';
 
 class VideoBApp extends StatelessWidget {
@@ -82,6 +84,26 @@ class VideoBApp extends StatelessWidget {
             ),
           ),
         ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: ButtonStyle(
+            backgroundColor: WidgetStateProperty.resolveWith<Color?>(
+              (Set<WidgetState> states) {
+                if (states.contains(WidgetState.focused)) {
+                  return Colors.white;
+                }
+                return null;
+              },
+            ),
+            foregroundColor: WidgetStateProperty.resolveWith<Color?>(
+              (Set<WidgetState> states) {
+                if (states.contains(WidgetState.focused)) {
+                  return const Color(0xFF07111F);
+                }
+                return null;
+              },
+            ),
+          ),
+        ),
       ),
       home: const VideoBHomePage(),
     );
@@ -89,10 +111,15 @@ class VideoBApp extends StatelessWidget {
 }
 
 class _FootballCrestRepository {
-  static const String _storageKey = 'football_crest_cache_v1';
+  static const String _storageKey = 'football_crest_cache_v6';
   static final Map<String, Future<String?>> _pending =
       <String, Future<String?>>{};
   static final Map<String, String> _cache = <String, String>{};
+  static final ValueNotifier<int> _revision = ValueNotifier<int>(0);
+  static Timer? _persistDebounce;
+  static int _cacheGeneration = 0;
+
+  static ValueNotifier<int> get revisionListenable => _revision;
 
   static Future<void> loadPersistedCache(SharedPreferences preferences) async {
     final raw = preferences.getString(_storageKey);
@@ -112,6 +139,7 @@ class _FootballCrestRepository {
             value?.toString() ?? '',
           ),
         )..removeWhere((String _, String value) => value.trim().isEmpty));
+      _revision.value += 1;
     } catch (_) {
       return;
     }
@@ -119,6 +147,22 @@ class _FootballCrestRepository {
 
   static Future<void> persistCache(SharedPreferences preferences) async {
     await preferences.setString(_storageKey, jsonEncode(_cache));
+  }
+
+  static Future<void> clearCache(SharedPreferences preferences) async {
+    _cacheGeneration += 1;
+    _persistDebounce?.cancel();
+    _pending.clear();
+    _cache.clear();
+    await preferences.remove(_storageKey);
+    _revision.value += 1;
+  }
+
+  static List<String> cachedUrls() {
+    return _cache.values
+        .where((String value) => value.trim().isNotEmpty)
+        .toSet()
+        .toList();
   }
 
   static String? cachedCrestUrlForTeam(String teamName) {
@@ -130,6 +174,25 @@ class _FootballCrestRepository {
   }
 
   static Future<String?> crestUrlForTeam(String teamName) {
+    return crestUrlForTeamWithContext(teamName);
+  }
+
+  /// Schedules a debounced persist so that rapid badge discoveries
+  /// result in a single SharedPreferences write after 3 seconds of quiet.
+  static void _schedulePersist() {
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(seconds: 3), () async {
+      final prefs = await SharedPreferences.getInstance();
+      await persistCache(prefs);
+    });
+  }
+
+  static Future<String?> crestUrlForTeamWithContext(
+    String teamName, {
+    String? languageHint,
+    String? opponentName,
+    String? titleHint,
+  }) {
     final normalized = _normalizeKey(teamName);
     if (normalized.isEmpty) {
       return Future<String?>.value(null);
@@ -145,11 +208,24 @@ class _FootballCrestRepository {
       return existing;
     }
 
-    final future = _fetchCrestUrl(teamName.trim()).then((String? value) {
+    final generationAtStart = _cacheGeneration;
+    final future = _fetchCrestUrl(
+      teamName.trim(),
+      languageHint: languageHint,
+      opponentName: opponentName,
+      titleHint: titleHint,
+    ).then((String? value) {
+      if (generationAtStart != _cacheGeneration) {
+        _pending.remove(normalized);
+        return null;
+      }
       if (value != null && value.isNotEmpty) {
         _cache[normalized] = value;
+        _schedulePersist();
+        _revision.value += 1;
       } else {
         _cache.remove(normalized);
+        _revision.value += 1;
       }
       _pending.remove(normalized);
       return value;
@@ -161,59 +237,298 @@ class _FootballCrestRepository {
   static Future<void> prefetchForEntries(
     List<_VideoEntry> entries,
     SharedPreferences preferences,
+    void Function(_FootballCrestProgress progress)? onProgress,
   ) async {
-    final teamNames = <String>{};
+    const maxRounds = 3;
+    final requests = <String, _FootballCrestLookupRequest>{};
     for (final entry in entries) {
       if (entry.sportLabel != 'Calcio') {
         continue;
       }
-      teamNames.addAll(_extractFootballTeams(entry.name));
+      final teams = _extractFootballTeams(entry.name);
+      if (teams.length < 2) {
+        continue;
+      }
+      final languageHint = _languageHintForEntry(entry);
+      for (var i = 0; i < teams.length; i++) {
+        final team = teams[i];
+        final normalized = _normalizeKey(team);
+        if (normalized.isEmpty || requests.containsKey(normalized)) {
+          continue;
+        }
+        requests[normalized] = _FootballCrestLookupRequest(
+          teamName: team,
+          opponentName: teams[(i + 1) % teams.length],
+          languageHint: languageHint,
+          titleHint: entry.name,
+        );
+      }
     }
 
-    if (teamNames.isEmpty) {
+    if (requests.isEmpty) {
+      onProgress?.call(
+        const _FootballCrestProgress(
+          completed: 0,
+          total: 0,
+          currentTeam: null,
+        ),
+      );
       return;
     }
 
+    final orderedRequests = requests.values.toList()
+      ..sort(
+        (_FootballCrestLookupRequest a, _FootballCrestLookupRequest b) =>
+            a.teamName.compareTo(b.teamName),
+      );
+    final total = orderedRequests.length;
+    var completed = orderedRequests.where((_FootballCrestLookupRequest request) {
+      final normalized = _normalizeKey(request.teamName);
+      return normalized.isEmpty || _cache.containsKey(normalized);
+    }).length;
     var changed = false;
-    for (final teamName in teamNames) {
-      final normalized = _normalizeKey(teamName);
-      if (normalized.isEmpty || _cache.containsKey(normalized)) {
-        continue;
+    for (var round = 0; round < maxRounds; round++) {
+      var roundResolvedAny = false;
+      for (final request in orderedRequests) {
+        final teamName = request.teamName;
+        final normalized = _normalizeKey(teamName);
+        if (normalized.isEmpty) {
+          onProgress?.call(
+            _FootballCrestProgress(
+              completed: completed,
+              total: total,
+              currentTeam: teamName,
+            ),
+          );
+          continue;
+        }
+        if (_cache.containsKey(normalized)) {
+          onProgress?.call(
+            _FootballCrestProgress(
+              completed: completed,
+              total: total,
+              currentTeam: teamName,
+            ),
+          );
+          continue;
+        }
+
+        onProgress?.call(
+          _FootballCrestProgress(
+            completed: completed,
+            total: total,
+            currentTeam: teamName,
+          ),
+        );
+
+        await Future<void>.delayed(const Duration(seconds: 5));
+        final crest = await crestUrlForTeamWithContext(
+          teamName,
+          languageHint: request.languageHint,
+          opponentName: request.opponentName,
+          titleHint: request.titleHint,
+        );
+        if (crest != null && crest.isNotEmpty) {
+          changed = true;
+          roundResolvedAny = true;
+          completed += 1;
+        }
+        onProgress?.call(
+          _FootballCrestProgress(
+            completed: completed,
+            total: total,
+            currentTeam: teamName,
+          ),
+        );
       }
-      final crest = await crestUrlForTeam(teamName);
-      if (crest != null && crest.isNotEmpty) {
-        changed = true;
+
+      final missingCount = orderedRequests.where((_FootballCrestLookupRequest request) {
+        final normalized = _normalizeKey(request.teamName);
+        return normalized.isNotEmpty && !_cache.containsKey(normalized);
+      }).length;
+      if (missingCount == 0) {
+        break;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (!roundResolvedAny) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(seconds: 5));
     }
+
+    onProgress?.call(
+      _FootballCrestProgress(
+        completed: total,
+        total: total,
+        currentTeam: null,
+      ),
+    );
 
     if (changed) {
       await persistCache(preferences);
     }
   }
 
-  static Future<String?> _fetchCrestUrl(String teamName) async {
-    for (final candidate in _teamSearchCandidates(teamName)) {
-      for (final uri in _teamSearchUris(candidate)) {
-        try {
-          final response = await http.get(uri).timeout(const Duration(seconds: 6));
-          if (response.statusCode != 200) {
-            continue;
-          }
-          final payload = jsonDecode(response.body) as Map<String, dynamic>;
-          final rawTeams = payload['teams'];
-          if (rawTeams is! List) {
-            continue;
-          }
+  static String _languageHintForEntry(_VideoEntry entry) {
+    final languages = <String>{};
+    final direct = entry.language?.trim() ?? '';
+    if (direct.isNotEmpty && direct != 'Lingua non indicata') {
+      languages.add(direct);
+    }
+    for (final channel in entry.channels) {
+      final language = channel.language.trim();
+      if (language.isNotEmpty && language != 'Lingua non indicata') {
+        languages.add(language);
+      }
+    }
+    return languages.join(', ');
+  }
 
-          final matchedBadge = _matchBadge(rawTeams, candidate);
-          if (matchedBadge != null) {
-            return matchedBadge;
-          }
-        } catch (_) {
+  static Future<String?> _fetchCrestUrl(
+    String teamName, {
+    String? languageHint,
+    String? opponentName,
+    String? titleHint,
+  }) async {
+    final candidates = _teamSearchCandidates(teamName);
+    var firstCandidate = true;
+
+    for (final candidate in candidates) {
+      if (!firstCandidate) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      firstCandidate = false;
+
+      final uri = Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
+        queryParameters: <String, String>{'t': candidate},
+      );
+      try {
+        final response = await http.get(uri).timeout(const Duration(seconds: 8));
+        if (response.statusCode != 200) {
           continue;
         }
+
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        final teams = decoded['teams'];
+        if (teams is! List) {
+          continue;
+        }
+
+        final badge = _matchTeamSearchBadge(
+          teams.whereType<Map<String, dynamic>>().toList(),
+          candidates,
+          opponentName: opponentName,
+        );
+        if (badge != null && badge.isNotEmpty) {
+          return badge;
+        }
+      } catch (_) {
+        continue;
       }
+    }
+    return null;
+  }
+
+  static String _asciiTransliterate(String value) {
+    return value
+        .replaceAll(RegExp(r'[àáâãäå]'), 'a')
+        .replaceAll(RegExp(r'[ÀÁÂÃÄÅ]'), 'A')
+        .replaceAll(RegExp(r'[èéêë]'), 'e')
+        .replaceAll(RegExp(r'[ÈÉÊË]'), 'E')
+        .replaceAll(RegExp(r'[ìíîï]'), 'i')
+        .replaceAll(RegExp(r'[ÌÍÎÏ]'), 'I')
+        .replaceAll(RegExp(r'[òóôõö]'), 'o')
+        .replaceAll(RegExp(r'[ÒÓÔÕÖ]'), 'O')
+        .replaceAll(RegExp(r'[ùúûü]'), 'u')
+        .replaceAll(RegExp(r'[ÙÚÛÜ]'), 'U')
+        .replaceAll('ñ', 'n').replaceAll('Ñ', 'N')
+        .replaceAll('ç', 'c').replaceAll('Ç', 'C')
+        .replaceAll('ş', 's').replaceAll('Ş', 'S')
+        .replaceAll('ğ', 'g').replaceAll('Ğ', 'G')
+        .replaceAll('ı', 'i').replaceAll('İ', 'I')
+        .replaceAll('ø', 'o').replaceAll('Ø', 'O')
+        .replaceAll('æ', 'ae').replaceAll('Æ', 'Ae')
+        .replaceAll('ß', 'ss')
+        .replaceAll('ő', 'o').replaceAll('Ő', 'O')
+        .replaceAll('ě', 'e').replaceAll('ř', 'r')
+        .replaceAll('č', 'c').replaceAll('š', 's').replaceAll('ž', 'z');
+  }
+
+  static String? _matchTeamSearchBadge(
+    List<Map<String, dynamic>> teams,
+    List<String> candidates, {
+    String? opponentName,
+  }) {
+    for (final team in teams) {
+      final sport = (team['strSport'] as String?)?.trim().toLowerCase() ?? '';
+      final badge = (team['strBadge'] as String?)?.trim();
+      if (sport == 'soccer' && badge != null && badge.isNotEmpty) {
+        return badge;
+      }
+    }
+
+    String? bestBadge;
+    var bestScore = 0;
+    final normalizedOpponent = _normalizeKey(opponentName ?? '');
+
+    for (final team in teams) {
+      final badge = (team['strBadge'] as String?)?.trim();
+      if (badge == null || badge.isEmpty) {
+        continue;
+      }
+      final sport = (team['strSport'] as String?)?.trim().toLowerCase() ?? '';
+      final names = <String>[
+        team['strTeam'] as String? ?? '',
+        team['strTeamAlternate'] as String? ?? '',
+        team['strAlternate'] as String? ?? '',
+        team['strTeamShort'] as String? ?? '',
+      ];
+
+      if (sport == 'soccer') {
+        for (final candidate in candidates) {
+          final normalizedCandidate = _normalizeKey(candidate);
+          if (normalizedCandidate.isEmpty) {
+            continue;
+          }
+          for (final name in names) {
+            final normalizedName = _normalizeKey(name);
+            if (normalizedName.isEmpty) {
+              continue;
+            }
+            if (normalizedName == normalizedCandidate ||
+                normalizedName.contains(normalizedCandidate) ||
+                normalizedCandidate.contains(normalizedName)) {
+              return badge;
+            }
+          }
+        }
+      }
+
+      for (final candidate in candidates) {
+        final normalizedCandidate = _normalizeKey(candidate);
+        if (normalizedCandidate.isEmpty) {
+          continue;
+        }
+        for (final name in names) {
+          if (name.isEmpty) {
+            continue;
+          }
+          final normalizedName = _normalizeKey(name);
+          var score = _matchScore(normalizedCandidate, normalizedName);
+          if (normalizedOpponent.isNotEmpty &&
+              (normalizedName == normalizedOpponent ||
+                  normalizedCandidate == normalizedOpponent)) {
+            score -= 25;
+          }
+          if (score > bestScore) {
+            bestScore = score;
+            bestBadge = badge;
+          }
+        }
+      }
+    }
+
+    if (bestScore >= 70) {
+      return bestBadge;
     }
     return null;
   }
@@ -225,9 +540,14 @@ class _FootballCrestRepository {
 
   static List<String> _teamSearchCandidates(String teamName) {
     final cleaned = _cleanFootballTeamName(teamName);
+    final ascii = _asciiTransliterate(cleaned);
+    final cleanedLower = cleaned.toLowerCase();
     final candidates = <String>[
       cleaned,
       ...?_teamAliases[_normalizeKey(cleaned)],
+      // ASCII transliteration (e.g. "Atlético" → "Atletico", "Köln" → "Koln")
+      if (ascii != cleaned) ascii,
+      // Strip common club-type words
       cleaned
           .replaceAll(RegExp(r'\b(fc|cf|ac|sc|afc|cfc|club)\b', caseSensitive: false), '')
           .replaceAll(RegExp(r'\s+'), ' ')
@@ -240,68 +560,29 @@ class _FootballCrestRepository {
           .replaceAll(RegExp(r'\b(u17|u18|u19|u20|u21|u23)\b', caseSensitive: false), '')
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim(),
+      // Strip common sport-prefix words that aren't part of the search name in the DB
+      if (cleanedLower.startsWith('olympique '))
+        cleaned.substring('olympique '.length).trim(),
+      if (cleanedLower.startsWith('deportes '))
+        cleaned.substring('deportes '.length).trim(),
+      if (cleanedLower.startsWith('deportivo '))
+        cleaned.substring('deportivo '.length).trim(),
+      if (cleanedLower.startsWith('rb '))
+        cleaned.substring('rb '.length).trim(),
+      if (cleanedLower.startsWith('red bull '))
+        cleaned.substring('red bull '.length).trim(),
+      if (cleanedLower.startsWith('universidad '))
+        'Universidad de${cleaned.substring('universidad'.length)}',
+      // Strip hyphenated state/country suffixes (e.g. "Athletico-PR" → "Athletico")
+      cleaned.replaceAll(RegExp(r'\s*-\s*[A-Z]{2,3}$'), '').trim(),
+      // Strip trailing uppercase abbreviations (e.g. "Botafogo SP" → "Botafogo")
+      cleaned.replaceAll(RegExp(r'\s+[A-Z]{2,3}$'), '').trim(),
     ];
 
     return candidates
         .where((String value) => value.isNotEmpty)
         .toSet()
         .toList();
-  }
-
-  static List<Uri> _teamSearchUris(String candidate) {
-    final uris = <Uri>[
-      Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
-        queryParameters: <String, String>{'t': candidate},
-      ),
-    ];
-
-    final compact = candidate.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
-    if (compact.length <= 5 && compact.isNotEmpty) {
-      uris.add(
-        Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
-          queryParameters: <String, String>{'sname': compact.toUpperCase()},
-        ),
-      );
-    }
-    return uris;
-  }
-
-  static String? _matchBadge(List<dynamic> rawTeams, String candidate) {
-    final normalizedRequested = _normalizeKey(candidate);
-    String? bestBadge;
-    var bestScore = 0;
-
-    for (final dynamic item in rawTeams) {
-      if (item is! Map<String, dynamic>) {
-        continue;
-      }
-      final names = <String>[
-        item['strTeam'] as String? ?? '',
-        item['strAlternate'] as String? ?? '',
-        item['strTeamShort'] as String? ?? '',
-      ];
-      final badge = (item['strBadge'] as String?)?.trim();
-      if (badge == null || badge.isEmpty) {
-        continue;
-      }
-
-      for (final String value in names) {
-        if (value.isEmpty) {
-          continue;
-        }
-        final normalizedValue = _normalizeKey(value);
-        final score = _matchScore(normalizedRequested, normalizedValue);
-        if (score > bestScore) {
-          bestScore = score;
-          bestBadge = badge;
-        }
-      }
-    }
-
-    if (bestScore >= 70) {
-      return bestBadge;
-    }
-    return null;
   }
 
   static int _matchScore(String requested, String candidate) {
@@ -343,9 +624,30 @@ class _FootballCrestRepository {
     'inter': <String>['Inter Milan', 'Internazionale'],
     'internazionale': <String>['Inter', 'Inter Milan'],
     'milan': <String>['AC Milan'],
+    'napoli': <String>['SSC Napoli'],
+    'roma': <String>['AS Roma'],
+    'lazio': <String>['SS Lazio'],
+    'fiorentina': <String>['ACF Fiorentina'],
+    'atalanta': <String>['Atalanta BC'],
+    'bologna': <String>['Bologna FC'],
+    'torino': <String>['Torino Football Club', 'Torino FC'],
+    'udinese': <String>['Udinese Calcio'],
+    'cagliari': <String>['Cagliari Calcio'],
+    'genoa': <String>['Genoa CFC'],
+    'lecce': <String>['US Lecce'],
+    'verona': <String>['Hellas Verona'],
+    'parma': <String>['Parma Calcio 1913'],
+    'monza': <String>['AC Monza'],
+    'empoli': <String>['Empoli FC'],
+    'venezia': <String>['Venezia FC'],
+    'como': <String>['Como 1907'],
+    'cremonese': <String>['US Cremonese'],
+    'sassuolo': <String>['US Sassuolo'],
+    'pisa': <String>['Pisa Sporting Club', 'Pisa SC'],
     'juve': <String>['Juventus'],
-    'psg': <String>['Paris Saint-Germain'],
-    'parissg': <String>['Paris Saint-Germain'],
+    'psg': <String>['Paris SG'],
+    'parissg': <String>['Paris SG'],
+    'paris': <String>['Paris SG'],
     'manutd': <String>['Manchester United'],
     'manunited': <String>['Manchester United'],
     'mancity': <String>['Manchester City'],
@@ -364,7 +666,57 @@ class _FootballCrestRepository {
     'leverkusen': <String>['Bayer Leverkusen'],
     'benfica': <String>['SL Benfica'],
     'sporting': <String>['Sporting CP'],
+    // French clubs
+    'olympiquelyonnais': <String>['Lyon'],
+    'olympiquemarseille': <String>['Marseille'],
+    // Greek clubs
+    'olympiakospiraeus': <String>['Olympiacos'],
+    'olympiakos': <String>['Olympiacos'],
+    // German clubs (umlauts stripped: Köln → kln, Köln → Koln via ascii)
+    'kln': <String>['FC Koln'],
+    'koln': <String>['FC Koln'],
+    // Brazilian clubs
+    'athleticopr': <String>['Athletico Paranaense'],
+    'rbbragantino': <String>['Bragantino'],
+    // "Botafogo SP" → strip trailing "SP" via candidate generation → "Botafogo"
+    // Mexican clubs
+    'pumasunam': <String>['Pumas UNAM'],
+    // Argentine clubs
+    'centralcordobasde': <String>['Central Cordoba'],
+    'newellsoldboys': <String>["Newell's Old Boys"],
+    // Chilean clubs
+    'universitadechile': <String>['Universidad de Chile'],
+    'universidadchile': <String>['Universidad de Chile'],
+    // Scottish clubs
+    'hearts': <String>['Heart of Midlothian'],
   };
+
+}
+
+class _FootballCrestLookupRequest {
+  const _FootballCrestLookupRequest({
+    required this.teamName,
+    required this.opponentName,
+    required this.languageHint,
+    required this.titleHint,
+  });
+
+  final String teamName;
+  final String opponentName;
+  final String languageHint;
+  final String titleHint;
+}
+
+class _FootballCrestProgress {
+  const _FootballCrestProgress({
+    required this.completed,
+    required this.total,
+    required this.currentTeam,
+  });
+
+  final int completed;
+  final int total;
+  final String? currentTeam;
 }
 
 class VideoBHomePage extends StatefulWidget {
@@ -428,6 +780,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isScanningNowMode = false;
   int _nowScanCompleted = 0;
   int _nowScanTotal = 0;
+  int _crestScanCompleted = 0;
+  int _crestScanTotal = 0;
+  String? _crestScanCurrentTeam;
   String? _status;
 
   static const String _dohKey = 'doh_enabled';
@@ -922,8 +1277,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     final resolvedSourceUrl = response.request?.url.toString() ?? uri.toString();
-    final lastUpdate = _parseLastUpdateFromText(response.body);
-    final events = _parsePlainTextSchedule(response.body);
+    final decodedBody = _decodeRemoteText(response.bodyBytes);
+    final lastUpdate = _parseLastUpdateFromText(decodedBody);
+    final events = _parsePlainTextSchedule(decodedBody);
     return (resolvedSourceUrl, <_VideoEntry>[
       for (var i = 0; i < events.length; i++)
         _VideoEntry(
@@ -937,6 +1293,20 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           channels: events[i].channels,
         ),
     ], lastUpdate);
+  }
+
+  String _decodeRemoteText(List<int> bytes) {
+    final utf8Text = utf8.decode(bytes, allowMalformed: true);
+    final replacementCount = '�'.allMatches(utf8Text).length;
+    if (replacementCount <= 2) {
+      return utf8Text;
+    }
+
+    final latinText = latin1.decode(bytes);
+    if ('�'.allMatches(latinText).length < replacementCount) {
+      return latinText;
+    }
+    return utf8Text;
   }
 
   DateTime? _parseLastUpdateFromText(String raw) {
@@ -1271,6 +1641,148 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
   }
 
+  Future<void> _showListsDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Liste'),
+          contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+          content: SizedBox(
+            width: 520,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () {
+                        Navigator.of(dialogContext).pop();
+                        Navigator.of(context).pop();
+                        _showCreateListDialog();
+                      },
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      label: const Text('Nuova lista'),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: _videoLists.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (BuildContext context, int index) {
+                        final list = _videoLists[index];
+                        final isSelected = list.id == _selectedListId;
+                        return Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? const Color(0xFFF4B942)
+                                      : Colors.white.withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: ListTile(
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  onTap: () {
+                                    Navigator.of(dialogContext).pop();
+                                    Navigator.of(this.context).pop();
+                                    _selectList(list.id);
+                                  },
+                                  leading: Icon(
+                                    list.sourceType == _VideoListSourceType.manual
+                                        ? Icons.edit_note_rounded
+                                        : Icons.cloud_download_rounded,
+                                    color: isSelected
+                                        ? const Color(0xFF07111F)
+                                        : Colors.white70,
+                                  ),
+                                  title: Text(
+                                    list.name,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: isSelected
+                                          ? const Color(0xFF07111F)
+                                          : Colors.white,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    '${list.sourceType.label} • ${list.entries.length} link',
+                                    style: TextStyle(
+                                      color: isSelected
+                                          ? const Color(0xFF07111F).withValues(alpha: 0.72)
+                                          : Colors.white70,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            FilledButton.tonalIcon(
+                              onPressed: _videoLists.length == 1
+                                  ? null
+                                  : () {
+                                      Navigator.of(dialogContext).pop();
+                                      _confirmDeleteList(list);
+                                    },
+                              style: ButtonStyle(
+                                padding: WidgetStateProperty.all(
+                                  const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 12,
+                                  ),
+                                ),
+                                minimumSize: WidgetStateProperty.all(
+                                  const Size(0, 56),
+                                ),
+                                backgroundColor:
+                                    WidgetStateProperty.resolveWith<Color?>(
+                                  (Set<WidgetState> states) {
+                                    if (states.contains(WidgetState.disabled)) {
+                                      return Colors.white.withValues(alpha: 0.06);
+                                    }
+                                    return const Color(0x66FF5C5C);
+                                  },
+                                ),
+                                foregroundColor:
+                                    WidgetStateProperty.resolveWith<Color?>(
+                                  (Set<WidgetState> states) {
+                                    if (states.contains(WidgetState.disabled)) {
+                                      return Colors.white24;
+                                    }
+                                    return Colors.white;
+                                  },
+                                ),
+                              ),
+                              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                              label: const Text('Elimina'),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Chiudi'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _ensureSportList() async {
     final existingList = _videoLists.cast<_VideoList?>().firstWhere(
           (_VideoList? item) =>
@@ -1303,6 +1815,24 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       sourceType: _VideoListSourceType.imported,
       sourceUrl: _sportListSourceUrl,
     );
+  }
+
+  Future<void> _clearFootballCrestCache() async {
+    final preferences = await SharedPreferences.getInstance();
+    final cachedUrls = _FootballCrestRepository.cachedUrls();
+    for (final url in cachedUrls) {
+      await NetworkImage(url).evict();
+    }
+    await _FootballCrestRepository.clearCache(preferences);
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _status = 'Cache loghi svuotata.';
+    });
+    _showToastStatus('Cache loghi svuotata');
   }
 
   Future<void> _confirmDeleteList(_VideoList list) async {
@@ -1402,6 +1932,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       _isScanningNowMode = false;
       _nowScanCompleted = 0;
       _nowScanTotal = 0;
+      _crestScanCompleted = 0;
+      _crestScanTotal = 0;
+      _crestScanCurrentTeam = null;
       _status = 'Aggiornamento lista "${list.name}" in corso...';
     });
     if (keepFocusOnRefresh) {
@@ -1411,11 +1944,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     try {
       final (resolvedSourceUrl, importedEntries, parsedLastUpdate) =
           await _loadEntriesFromSource(sourceUrl);
-      final preferences = await SharedPreferences.getInstance();
-      await _FootballCrestRepository.prefetchForEntries(
-        importedEntries,
-        preferences,
-      );
 
       final updatedList = list.copyWith(
         entries: importedEntries,
@@ -1440,6 +1968,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
 
       await _persistLists();
+
+      if (importedEntries.isNotEmpty) {
+        unawaited(_prefetchCrestsInBackground(importedEntries));
+      }
 
       if (shouldRestoreNowMode && importedEntries.isNotEmpty && mounted) {
         await _activateNowMode(updatedList);
@@ -1468,9 +2000,34 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (mounted) {
         setState(() {
           _isBusy = false;
+          _crestScanCurrentTeam = null;
         });
       }
     }
+  }
+
+  Future<void> _prefetchCrestsInBackground(List<_VideoEntry> entries) async {
+    final preferences = await SharedPreferences.getInstance();
+    await _FootballCrestRepository.prefetchForEntries(
+      entries,
+      preferences,
+      (_FootballCrestProgress progress) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _crestScanCompleted = progress.completed;
+          _crestScanTotal = progress.total;
+          _crestScanCurrentTeam = progress.currentTeam;
+        });
+      },
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _crestScanCurrentTeam = null;
+    });
   }
 
   String _buildImportedEntryName(String url, int index) {
@@ -1809,7 +2366,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: FilledButton.tonalIcon(
-                        onPressed: _showCreateListDialog,
+                        onPressed: _showListsDialog,
                         style: ButtonStyle(
                           padding: WidgetStateProperty.all(
                             const EdgeInsets.symmetric(
@@ -1825,162 +2382,66 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                             horizontal: -2,
                             vertical: -2,
                           ),
-                          backgroundColor:
-                              WidgetStateProperty.resolveWith<Color?>(
-                            (Set<WidgetState> states) {
-                              if (states.contains(WidgetState.focused)) {
-                                return Colors.white;
-                              }
-                              return null;
-                            },
+                        ),
+                        icon: const Icon(Icons.view_list_rounded, size: 18),
+                        label: const Text('Liste'),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _ensureSportList,
+                        style: ButtonStyle(
+                          padding: WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
                           ),
-                          foregroundColor:
-                              WidgetStateProperty.resolveWith<Color?>(
-                            (Set<WidgetState> states) {
-                              if (states.contains(WidgetState.focused)) {
-                                return const Color(0xFF07111F);
-                              }
-                              return null;
-                            },
+                          minimumSize: WidgetStateProperty.all(
+                            const Size(0, 36),
+                          ),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: const VisualDensity(
+                            horizontal: -2,
+                            vertical: -2,
                           ),
                         ),
-                        icon: const Icon(Icons.add_rounded, size: 18),
-                        label: const Text('Aggiungi lista'),
+                        icon: const Icon(Icons.playlist_add_rounded, size: 18),
+                        label: const Text('Aggiungi Sport'),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _clearFootballCrestCache,
+                        style: ButtonStyle(
+                          padding: WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                          minimumSize: WidgetStateProperty.all(
+                            const Size(0, 36),
+                          ),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: const VisualDensity(
+                            horizontal: -2,
+                            vertical: -2,
+                          ),
+                        ),
+                        icon: const Icon(Icons.delete_sweep_rounded, size: 18),
+                        label: const Text('Svuota cache loghi'),
                       ),
                     ),
                   ],
                 ),
               ),
               const Divider(height: 1),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _videoLists.length,
-                  itemBuilder: (BuildContext context, int index) {
-                    final list = _videoLists[index];
-                    final isSelected = list.id == _selectedListId;
-                    final accent = const Color(0xFFF4B942);
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 4),
-                      child: Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: Focus(
-                              child: Builder(
-                                builder: (BuildContext ctx) {
-                                  final hasFocus = Focus.of(ctx).hasFocus;
-                                  return AnimatedContainer(
-                                    duration: const Duration(milliseconds: 150),
-                                    decoration: BoxDecoration(
-                                      color: hasFocus
-                                          ? Colors.white
-                                          : isSelected
-                                              ? accent
-                                              : Colors.white
-                                                  .withValues(alpha: 0.06),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: InkWell(
-                                      borderRadius: BorderRadius.circular(14),
-                                      onTap: () {
-                                        Navigator.of(context).pop();
-                                        _selectList(list.id);
-                                      },
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 14, vertical: 10),
-                                        child: Row(
-                                          children: <Widget>[
-                                            Icon(
-                                              list.sourceType ==
-                                                      _VideoListSourceType
-                                                          .manual
-                                                  ? Icons.edit_note_rounded
-                                                  : Icons
-                                                      .cloud_download_rounded,
-                                              size: 18,
-                                              color: (isSelected || hasFocus)
-                                                  ? const Color(0xFF07111F)
-                                                  : Colors.white70,
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: <Widget>[
-                                                  Text(
-                                                    list.name,
-                                                    style: TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      color: (isSelected || hasFocus)
-                                                          ? const Color(
-                                                              0xFF07111F)
-                                                          : Colors.white,
-                                                    ),
-                                                  ),
-                                                  Text(
-                                                    '${list.sourceType.label} • ${list.entries.length} link',
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      color: (isSelected || hasFocus)
-                                                          ? const Color(
-                                                                  0xFF07111F)
-                                                              .withValues(
-                                                                  alpha: 0.7)
-                                                          : Colors.white54,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Focus(
-                            child: Builder(
-                              builder: (BuildContext ctx) {
-                                final hasFocus = Focus.of(ctx).hasFocus;
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  decoration: BoxDecoration(
-                                    color: hasFocus
-                                        ? const Color(0xFFFF4444).withValues(alpha: 0.25)
-                                        : Colors.white.withValues(alpha: 0.06),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(12),
-                                    onTap: () => _confirmDeleteList(list),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(10),
-                                      child: Icon(
-                                        Icons.delete_outline_rounded,
-                                        size: 18,
-                                        color: hasFocus
-                                            ? const Color(0xFFFF4444)
-                                            : Colors.white54,
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
+              const Spacer(),
               const Divider(height: 1),
               SwitchListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -2095,6 +2556,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   (_isNowMode || _isScanningNowMode)) ...<Widget>[
                                 const SizedBox(height: 18),
                                 _buildNowModeProgress(theme),
+                              ],
+                              if (selectedList.sourceType ==
+                                      _VideoListSourceType.imported &&
+                                  _crestScanTotal > 0 &&
+                                  _crestScanCompleted < _crestScanTotal) ...<Widget>[
+                                const SizedBox(height: 18),
+                                _buildCrestProgress(theme),
                               ],
                               const SizedBox(height: 18),
                               if (_activeEntryName != null) ...<Widget>[
@@ -2376,6 +2844,50 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     return SelectableText(
       sourceUrl,
       style: const TextStyle(color: Colors.white70),
+    );
+  }
+
+  Widget _buildCrestProgress(ThemeData theme) {
+    final progress = _crestScanTotal == 0
+        ? 0.0
+        : (_crestScanCompleted / _crestScanTotal).clamp(0.0, 1.0);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const Icon(Icons.shield_rounded, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Aggiornamento $_crestScanCompleted/$_crestScanTotal',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: Colors.white.withValues(alpha: 0.10),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -3325,50 +3837,54 @@ class _FootballTeamCrest extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final badgeUrl = _FootballCrestRepository.cachedCrestUrlForTeam(teamName);
-    return Row(
-      mainAxisAlignment:
-          alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: <Widget>[
-        Flexible(
-          child: Column(
-            crossAxisAlignment: alignEnd
-                ? CrossAxisAlignment.end
-                : CrossAxisAlignment.start,
-            children: <Widget>[
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: badgeUrl != null && badgeUrl.isNotEmpty
-                    ? Image.network(
-                        badgeUrl,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, __, ___) =>
-                            _FootballTeamFallback(name: teamName),
-                      )
-                    : _FootballTeamFallback(name: teamName),
+    return ValueListenableBuilder<int>(
+      valueListenable: _FootballCrestRepository.revisionListenable,
+      builder: (BuildContext context, int _, Widget? __) {
+        final badgeUrl = _FootballCrestRepository.cachedCrestUrlForTeam(teamName);
+        return Row(
+          mainAxisAlignment:
+              alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+          children: <Widget>[
+            Flexible(
+              child: Column(
+                crossAxisAlignment:
+                    alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: <Widget>[
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: badgeUrl != null && badgeUrl.isNotEmpty
+                        ? Image.network(
+                            badgeUrl,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) =>
+                                _FootballTeamFallback(name: teamName),
+                          )
+                        : _FootballTeamFallback(name: teamName),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    teamName,
+                    maxLines: 2,
+                    textAlign: alignEnd ? TextAlign.end : TextAlign.start,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white.withValues(alpha: 0.85),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                teamName,
-                maxLines: 2,
-                textAlign: alignEnd ? TextAlign.end : TextAlign.start,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.85),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
   }
 }
