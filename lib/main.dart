@@ -12,6 +12,7 @@ void main() {
 
 const String _sportListName = 'Sport';
 const String _sportListSourceUrl = 'https://sito.it/prog.txt';
+const String _sportsDbApiBase = 'https://www.thesportsdb.com/api/v1/json/123';
 
 class VideoBApp extends StatelessWidget {
   const VideoBApp({super.key});
@@ -85,6 +86,285 @@ class VideoBApp extends StatelessWidget {
       home: const VideoBHomePage(),
     );
   }
+}
+
+class _FootballCrestRepository {
+  static const String _storageKey = 'football_crest_cache_v1';
+  static final Map<String, Future<String?>> _pending =
+      <String, Future<String?>>{};
+  static final Map<String, String> _cache = <String, String>{};
+
+  static Future<void> loadPersistedCache(SharedPreferences preferences) async {
+    final raw = preferences.getString(_storageKey);
+    if (raw == null || raw.isEmpty) {
+      return;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        return;
+      }
+      _cache
+        ..clear()
+        ..addAll(decoded.map(
+          (dynamic key, dynamic value) => MapEntry(
+            key.toString(),
+            value?.toString() ?? '',
+          ),
+        )..removeWhere((String _, String value) => value.trim().isEmpty));
+    } catch (_) {
+      return;
+    }
+  }
+
+  static Future<void> persistCache(SharedPreferences preferences) async {
+    await preferences.setString(_storageKey, jsonEncode(_cache));
+  }
+
+  static String? cachedCrestUrlForTeam(String teamName) {
+    final normalized = _normalizeKey(teamName);
+    if (normalized.isEmpty) {
+      return null;
+    }
+    return _cache[normalized];
+  }
+
+  static Future<String?> crestUrlForTeam(String teamName) {
+    final normalized = _normalizeKey(teamName);
+    if (normalized.isEmpty) {
+      return Future<String?>.value(null);
+    }
+
+    final cached = _cache[normalized];
+    if (cached != null && cached.isNotEmpty) {
+      return Future<String?>.value(cached);
+    }
+
+    final existing = _pending[normalized];
+    if (existing != null) {
+      return existing;
+    }
+
+    final future = _fetchCrestUrl(teamName.trim()).then((String? value) {
+      if (value != null && value.isNotEmpty) {
+        _cache[normalized] = value;
+      } else {
+        _cache.remove(normalized);
+      }
+      _pending.remove(normalized);
+      return value;
+    });
+    _pending[normalized] = future;
+    return future;
+  }
+
+  static Future<void> prefetchForEntries(
+    List<_VideoEntry> entries,
+    SharedPreferences preferences,
+  ) async {
+    final teamNames = <String>{};
+    for (final entry in entries) {
+      if (entry.sportLabel != 'Calcio') {
+        continue;
+      }
+      teamNames.addAll(_extractFootballTeams(entry.name));
+    }
+
+    if (teamNames.isEmpty) {
+      return;
+    }
+
+    var changed = false;
+    for (final teamName in teamNames) {
+      final normalized = _normalizeKey(teamName);
+      if (normalized.isEmpty || _cache.containsKey(normalized)) {
+        continue;
+      }
+      final crest = await crestUrlForTeam(teamName);
+      if (crest != null && crest.isNotEmpty) {
+        changed = true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+
+    if (changed) {
+      await persistCache(preferences);
+    }
+  }
+
+  static Future<String?> _fetchCrestUrl(String teamName) async {
+    for (final candidate in _teamSearchCandidates(teamName)) {
+      for (final uri in _teamSearchUris(candidate)) {
+        try {
+          final response = await http.get(uri).timeout(const Duration(seconds: 6));
+          if (response.statusCode != 200) {
+            continue;
+          }
+          final payload = jsonDecode(response.body) as Map<String, dynamic>;
+          final rawTeams = payload['teams'];
+          if (rawTeams is! List) {
+            continue;
+          }
+
+          final matchedBadge = _matchBadge(rawTeams, candidate);
+          if (matchedBadge != null) {
+            return matchedBadge;
+          }
+        } catch (_) {
+          continue;
+        }
+      }
+    }
+    return null;
+  }
+
+  static String _normalizeKey(String value) {
+    final lower = value.toLowerCase().trim();
+    return lower.replaceAll(RegExp(r'[^a-z0-9]+'), '');
+  }
+
+  static List<String> _teamSearchCandidates(String teamName) {
+    final cleaned = _cleanFootballTeamName(teamName);
+    final candidates = <String>[
+      cleaned,
+      ...?_teamAliases[_normalizeKey(cleaned)],
+      cleaned
+          .replaceAll(RegExp(r'\b(fc|cf|ac|sc|afc|cfc|club)\b', caseSensitive: false), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim(),
+      cleaned
+          .replaceAll(RegExp(r'\b(women|wfc|femminile|ladies)\b', caseSensitive: false), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim(),
+      cleaned
+          .replaceAll(RegExp(r'\b(u17|u18|u19|u20|u21|u23)\b', caseSensitive: false), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim(),
+    ];
+
+    return candidates
+        .where((String value) => value.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  static List<Uri> _teamSearchUris(String candidate) {
+    final uris = <Uri>[
+      Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
+        queryParameters: <String, String>{'t': candidate},
+      ),
+    ];
+
+    final compact = candidate.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    if (compact.length <= 5 && compact.isNotEmpty) {
+      uris.add(
+        Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
+          queryParameters: <String, String>{'sname': compact.toUpperCase()},
+        ),
+      );
+    }
+    return uris;
+  }
+
+  static String? _matchBadge(List<dynamic> rawTeams, String candidate) {
+    final normalizedRequested = _normalizeKey(candidate);
+    String? bestBadge;
+    var bestScore = 0;
+
+    for (final dynamic item in rawTeams) {
+      if (item is! Map<String, dynamic>) {
+        continue;
+      }
+      final names = <String>[
+        item['strTeam'] as String? ?? '',
+        item['strAlternate'] as String? ?? '',
+        item['strTeamShort'] as String? ?? '',
+      ];
+      final badge = (item['strBadge'] as String?)?.trim();
+      if (badge == null || badge.isEmpty) {
+        continue;
+      }
+
+      for (final String value in names) {
+        if (value.isEmpty) {
+          continue;
+        }
+        final normalizedValue = _normalizeKey(value);
+        final score = _matchScore(normalizedRequested, normalizedValue);
+        if (score > bestScore) {
+          bestScore = score;
+          bestBadge = badge;
+        }
+      }
+    }
+
+    if (bestScore >= 70) {
+      return bestBadge;
+    }
+    return null;
+  }
+
+  static int _matchScore(String requested, String candidate) {
+    if (requested.isEmpty || candidate.isEmpty) {
+      return 0;
+    }
+    if (requested == candidate) {
+      return 100;
+    }
+    if (candidate.startsWith(requested) || requested.startsWith(candidate)) {
+      return 90;
+    }
+    if (candidate.contains(requested) || requested.contains(candidate)) {
+      return 80;
+    }
+    final requestedTokens = _tokenize(requested);
+    final candidateTokens = _tokenize(candidate);
+    if (requestedTokens.isEmpty || candidateTokens.isEmpty) {
+      return 0;
+    }
+    final sharedCount = requestedTokens.intersection(candidateTokens).length;
+    if (sharedCount == 0) {
+      return 0;
+    }
+    final ratio =
+        (sharedCount * 100) ~/ math.max(requestedTokens.length, candidateTokens.length);
+    return ratio >= 50 ? 70 + (ratio ~/ 5) : 0;
+  }
+
+  static Set<String> _tokenize(String value) {
+    final source = value.toLowerCase().trim();
+    return source
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((String token) => token.isNotEmpty)
+        .toSet();
+  }
+
+  static const Map<String, List<String>> _teamAliases = <String, List<String>>{
+    'inter': <String>['Inter Milan', 'Internazionale'],
+    'internazionale': <String>['Inter', 'Inter Milan'],
+    'milan': <String>['AC Milan'],
+    'juve': <String>['Juventus'],
+    'psg': <String>['Paris Saint-Germain'],
+    'parissg': <String>['Paris Saint-Germain'],
+    'manutd': <String>['Manchester United'],
+    'manunited': <String>['Manchester United'],
+    'mancity': <String>['Manchester City'],
+    'atleticomadrid': <String>['Atletico Madrid'],
+    'atletico': <String>['Atletico Madrid'],
+    'realmadrid': <String>['Real Madrid'],
+    'barca': <String>['Barcelona'],
+    'fcbarcelona': <String>['Barcelona'],
+    'bayern': <String>['Bayern Munich'],
+    'bayernmunich': <String>['Bayern Munich'],
+    'dortmund': <String>['Borussia Dortmund'],
+    'borussiadortmund': <String>['Borussia Dortmund'],
+    'newcastle': <String>['Newcastle United'],
+    'tottenham': <String>['Tottenham Hotspur'],
+    'spurs': <String>['Tottenham Hotspur'],
+    'leverkusen': <String>['Bayer Leverkusen'],
+    'benfica': <String>['SL Benfica'],
+    'sporting': <String>['Sporting CP'],
+  };
 }
 
 class VideoBHomePage extends StatefulWidget {
@@ -263,6 +543,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
   Future<void> _loadLists() async {
     final preferences = await SharedPreferences.getInstance();
+    await _FootballCrestRepository.loadPersistedCache(preferences);
     final storedDohEnabled = preferences.getBool(_dohKey) ?? false;
     final nativeDohEnabled =
         await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
@@ -1130,6 +1411,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     try {
       final (resolvedSourceUrl, importedEntries, parsedLastUpdate) =
           await _loadEntriesFromSource(sourceUrl);
+      final preferences = await SharedPreferences.getInstance();
+      await _FootballCrestRepository.prefetchForEntries(
+        importedEntries,
+        preferences,
+      );
 
       final updatedList = list.copyWith(
         entries: importedEntries,
@@ -2470,17 +2756,22 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       ],
                     ),
                     const SizedBox(height: 14),
-                    Text(
-                      entry.name,
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        height: 1.25,
+                    if (entry.sportLabel == 'Calcio') ...<Widget>[
+                      _FootballEventCrests(title: entry.name),
+                      const SizedBox(height: 14),
+                    ],
+                    if (entry.sportLabel != 'Calcio')
+                      Text(
+                        entry.name,
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                          height: 1.25,
+                        ),
                       ),
-                    ),
                     if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
                       const SizedBox(height: 8),
                       Text(
@@ -2790,6 +3081,76 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 }
 
+List<String> _extractFootballTeams(String title) {
+  final normalized = title
+      .replaceAll('–', '-')
+      .replaceAll('—', '-')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  final separator = RegExp(r'\s+(?:vs\.?|v\.?|x|-)\s+', caseSensitive: false);
+  final match = separator.firstMatch(normalized);
+  if (match == null) {
+    return const <String>[];
+  }
+
+  final leftRaw = normalized.substring(0, match.start);
+  final rightRaw = normalized.substring(match.end);
+  final parts = <String>[leftRaw, rightRaw];
+  if (parts.length < 2) {
+    return const <String>[];
+  }
+
+  final home = _cleanFootballTeamName(parts.first);
+  final away = _cleanFootballTeamName(parts.sublist(1).join(' '));
+  if (home.isEmpty || away.isEmpty) {
+    return const <String>[];
+  }
+  return <String>[home, away];
+}
+
+String _cleanFootballTeamName(String value) {
+  var cleaned = value
+      .replaceAll(RegExp(r'\b\d{1,2}:\d{2}\b'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  cleaned = cleaned.replaceAll(RegExp(r'\([^)]*\)'), '').trim();
+  cleaned = cleaned.replaceAll(RegExp(r'\[[^\]]*\]'), '').trim();
+  cleaned = cleaned
+      .replaceAll(
+        RegExp(
+          r'\b(live|stream|streaming|watch|hd|fhd|uhd|channel|canale|soccer|calcio)\b',
+          caseSensitive: false,
+        ),
+        ' ',
+      )
+      .trim();
+
+  final prefixSeparators = <String>[':', ' - '];
+  for (final separator in prefixSeparators) {
+    if (!cleaned.contains(separator)) {
+      continue;
+    }
+    final parts = cleaned.split(separator);
+    final tail = parts.last.trim();
+    if (tail.split(' ').length >= 1) {
+      cleaned = tail;
+    }
+  }
+
+  cleaned = cleaned
+      .replaceAll(
+        RegExp(
+          r'\b(serie a|serie b|premier league|la liga|bundesliga|ligue 1|champions league|europa league|conference league|coppa italia|coppa del re|super cup|world cup|qualifiers?)\b',
+          caseSensitive: false,
+        ),
+        ' ',
+      )
+      .trim();
+  cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
+  return cleaned;
+}
+
 enum _VideoListSourceType {
   manual('Manuale'),
   imported('Importata');
@@ -2917,6 +3278,127 @@ class _ImportedScheduleAccumulator {
     }
     final sorted = _languages.toList()..sort();
     return sorted.join(', ');
+  }
+}
+
+class _FootballEventCrests extends StatelessWidget {
+  const _FootballEventCrests({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final teams = _extractFootballTeams(title);
+    if (teams.length < 2) {
+      return const SizedBox.shrink();
+    }
+
+    return Row(
+      children: <Widget>[
+        Expanded(child: _FootballTeamCrest(teamName: teams[0])),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text(
+            'VS',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: Colors.white.withValues(alpha: 0.72),
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+        Expanded(child: _FootballTeamCrest(teamName: teams[1], alignEnd: true)),
+      ],
+    );
+  }
+}
+
+class _FootballTeamCrest extends StatelessWidget {
+  const _FootballTeamCrest({
+    required this.teamName,
+    this.alignEnd = false,
+  });
+
+  final String teamName;
+  final bool alignEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    final badgeUrl = _FootballCrestRepository.cachedCrestUrlForTeam(teamName);
+    return Row(
+      mainAxisAlignment:
+          alignEnd ? MainAxisAlignment.end : MainAxisAlignment.start,
+      children: <Widget>[
+        Flexible(
+          child: Column(
+            crossAxisAlignment: alignEnd
+                ? CrossAxisAlignment.end
+                : CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                width: 54,
+                height: 54,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: badgeUrl != null && badgeUrl.isNotEmpty
+                    ? Image.network(
+                        badgeUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) =>
+                            _FootballTeamFallback(name: teamName),
+                      )
+                    : _FootballTeamFallback(name: teamName),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                teamName,
+                maxLines: 2,
+                textAlign: alignEnd ? TextAlign.end : TextAlign.start,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.85),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FootballTeamFallback extends StatelessWidget {
+  const _FootballTeamFallback({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final words = name
+        .split(RegExp(r'\s+'))
+        .where((String part) => part.trim().isNotEmpty)
+        .take(2)
+        .toList();
+    final initials = words
+        .map((String part) => part.substring(0, 1).toUpperCase())
+        .join();
+
+    return Center(
+      child: Text(
+        initials.isEmpty ? '?' : initials,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+          color: Colors.white,
+        ),
+      ),
+    );
   }
 }
 
