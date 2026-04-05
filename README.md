@@ -5,8 +5,8 @@ Video BonoTrot e un lettore video per Android TV / Google TV che apre stream da 
 ## Download
 
 - Ultima release: `https://github.com/BonoTrotDJ/VideoB/releases/latest`
-- Release `v1.0.0`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.0`
-- APK `v1.0.0`: `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.0/app-release.apk`
+- Release `v1.0.2`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.2`
+- APK `v1.0.2`: `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.2/app-release.apk`
 
 L'app permette di:
 
@@ -16,6 +16,11 @@ L'app permette di:
 - mostrare metadati utili per ogni evento come giorno, ora, lingua e sport
 - passare alla modalità `Link` per vedere solo i link trovati, senza programmazione
 - aprire il link direttamente nel player interno
+- riconoscere gli eventi di calcio e mostrare gli stemmi delle squadre
+- scaricare gli stemmi in background mentre la lista è già consultabile
+- aggiornare gli stemmi in tempo reale senza dover cambiare schermata
+- svuotare la cache loghi direttamente dal menu laterale
+- creare rapidamente la lista `Sport` dal menu laterale
 
 ## Uso
 
@@ -63,4 +68,4 @@ flutter run
 
 ## Release APK
 
-Quando pubblichi un tag Git come `v1.0.1`, GitHub Actions builda automaticamente la release Android e allega un APK alla GitHub Release corrispondente.
+Quando pubblichi un tag Git come `v1.0.2`, GitHub Actions builda automaticamente la release Android e allega un APK alla GitHub Release corrispondente.

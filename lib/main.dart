@@ -352,7 +352,6 @@ class _FootballCrestRepository {
       if (!roundResolvedAny) {
         break;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
     }
 
     onProgress?.call(
@@ -390,14 +389,7 @@ class _FootballCrestRepository {
     String? titleHint,
   }) async {
     final candidates = _teamSearchCandidates(teamName);
-    var firstCandidate = true;
-
     for (final candidate in candidates) {
-      if (!firstCandidate) {
-        await Future<void>.delayed(const Duration(milliseconds: 150));
-      }
-      firstCandidate = false;
-
       final uri = Uri.parse('$_sportsDbApiBase/searchteams.php').replace(
         queryParameters: <String, String>{'t': candidate},
       );
@@ -732,7 +724,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _selectedListKey = 'selected_video_list_v2';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.1+2';
+  static const _appVersion = '1.0.2+3';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -1748,6 +1740,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                     if (states.contains(WidgetState.disabled)) {
                                       return Colors.white.withValues(alpha: 0.06);
                                     }
+                                    if (states.contains(WidgetState.focused)) {
+                                      return Colors.black;
+                                    }
                                     return const Color(0x66FF5C5C);
                                   },
                                 ),
@@ -1756,6 +1751,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   (Set<WidgetState> states) {
                                     if (states.contains(WidgetState.disabled)) {
                                       return Colors.white24;
+                                    }
+                                    if (states.contains(WidgetState.focused)) {
+                                      return Colors.white;
                                     }
                                     return Colors.white;
                                   },
@@ -1816,24 +1814,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       sourceType: _VideoListSourceType.imported,
       sourceUrl: _sportListSourceUrl,
     );
-  }
-
-  Future<void> _clearFootballCrestCache() async {
-    final preferences = await SharedPreferences.getInstance();
-    final cachedUrls = _FootballCrestRepository.cachedUrls();
-    for (final url in cachedUrls) {
-      await NetworkImage(url).evict();
-    }
-    await _FootballCrestRepository.clearCache(preferences);
-    PaintingBinding.instance.imageCache.clear();
-    PaintingBinding.instance.imageCache.clearLiveImages();
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _status = 'Cache loghi svuotata.';
-    });
-    _showToastStatus('Cache loghi svuotata');
   }
 
   Future<void> _confirmDeleteList(_VideoList list) async {
@@ -2384,6 +2364,24 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                             horizontal: -2,
                             vertical: -2,
                           ),
+                          backgroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return Colors.black;
+                              }
+                              return null;
+                            },
+                          ),
+                          foregroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return Colors.white;
+                              }
+                              return null;
+                            },
+                          ),
                         ),
                         icon: const Icon(Icons.view_list_rounded, size: 18),
                         label: const Text('Liste'),
@@ -2412,31 +2410,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         ),
                         icon: const Icon(Icons.playlist_add_rounded, size: 18),
                         label: const Text('Aggiungi Sport'),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: FilledButton.tonalIcon(
-                        onPressed: _clearFootballCrestCache,
-                        style: ButtonStyle(
-                          padding: WidgetStateProperty.all(
-                            const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                          ),
-                          minimumSize: WidgetStateProperty.all(
-                            const Size(0, 36),
-                          ),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          visualDensity: const VisualDensity(
-                            horizontal: -2,
-                            vertical: -2,
-                          ),
-                        ),
-                        icon: const Icon(Icons.delete_sweep_rounded, size: 18),
-                        label: const Text('Svuota cache loghi'),
                       ),
                     ),
                   ],
