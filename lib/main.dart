@@ -321,7 +321,7 @@ class _FootballCrestRepository {
           ),
         );
 
-        await Future<void>.delayed(const Duration(seconds: 5));
+        await Future<void>.delayed(const Duration(seconds: 2));
         final crest = await crestUrlForTeamWithContext(
           teamName,
           languageHint: request.languageHint,
@@ -331,8 +331,8 @@ class _FootballCrestRepository {
         if (crest != null && crest.isNotEmpty) {
           changed = true;
           roundResolvedAny = true;
-          completed += 1;
         }
+        completed = math.min(completed + 1, total);
         onProgress?.call(
           _FootballCrestProgress(
             completed: completed,
@@ -352,7 +352,7 @@ class _FootballCrestRepository {
       if (!roundResolvedAny) {
         break;
       }
-      await Future<void>.delayed(const Duration(seconds: 5));
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
 
     onProgress?.call(
@@ -783,6 +783,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   int _crestScanCompleted = 0;
   int _crestScanTotal = 0;
   String? _crestScanCurrentTeam;
+  bool _crestScanDismissed = false;
   String? _status;
 
   static const String _dohKey = 'doh_enabled';
@@ -1935,6 +1936,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       _crestScanCompleted = 0;
       _crestScanTotal = 0;
       _crestScanCurrentTeam = null;
+      _crestScanDismissed = false;
       _status = 'Aggiornamento lista "${list.name}" in corso...';
     });
     if (keepFocusOnRefresh) {
@@ -2560,7 +2562,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                               if (selectedList.sourceType ==
                                       _VideoListSourceType.imported &&
                                   _crestScanTotal > 0 &&
-                                  _crestScanCompleted < _crestScanTotal) ...<Widget>[
+                                  _crestScanCompleted < _crestScanTotal &&
+                                  !_crestScanDismissed) ...<Widget>[
                                 const SizedBox(height: 18),
                                 _buildCrestProgress(theme),
                               ],
@@ -2869,11 +2872,19 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Aggiornamento $_crestScanCompleted/$_crestScanTotal',
+                  'Loghi squadre $_crestScanCompleted/$_crestScanTotal',
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ),
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _crestScanDismissed = true;
+                  });
+                },
+                child: const Icon(Icons.close, size: 16),
               ),
             ],
           ),
