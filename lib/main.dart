@@ -724,7 +724,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _selectedListKey = 'selected_video_list_v2';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.2+3';
+  static const _appVersion = '1.0.3+4';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -768,6 +768,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isLoading = true;
   bool _isBusy = false;
   bool _dohEnabled = false;
+  bool _isAmazonFireTv = false;
   bool _isNowMode = false;
   bool _isScanningNowMode = false;
   int _nowScanCompleted = 0;
@@ -895,6 +896,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final storedDohEnabled = preferences.getBool(_dohKey) ?? false;
     final nativeDohEnabled =
         await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
+    final isAmazonFireTv =
+        await _channel.invokeMethod<bool>('isAmazonFireTv') ?? false;
     _dohEnabled = nativeDohEnabled || storedDohEnabled;
     await preferences.setBool(_dohKey, _dohEnabled);
     var rawLists = preferences.getString(_listsKey);
@@ -932,6 +935,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     setState(() {
+      _isAmazonFireTv = isAmazonFireTv;
       _videoLists = parsedLists;
       _selectedListId = effectiveSelectedId;
       _isLoading = false;
@@ -2177,6 +2181,32 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final selectedList = _selectedList;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final uiScale = _isAmazonFireTv ? 0.84 : 1.0;
+    final drawerWidth = _isAmazonFireTv
+        ? math.min(screenWidth * 0.66, 232.0)
+        : screenWidth >= 1400
+            ? 360.0
+            : screenWidth >= 1100
+                ? 320.0
+                : screenWidth >= 900
+                    ? 292.0
+                    : 264.0;
+    final drawerSectionPadding = _isAmazonFireTv
+        ? const EdgeInsets.fromLTRB(10, 10, 10, 8)
+        : screenWidth >= 1100
+            ? const EdgeInsets.fromLTRB(20, 16, 20, 12)
+            : const EdgeInsets.fromLTRB(14, 12, 14, 10);
+    final drawerFooterPadding = _isAmazonFireTv
+        ? const EdgeInsets.fromLTRB(10, 10, 10, 12)
+        : screenWidth >= 1100
+            ? const EdgeInsets.fromLTRB(20, 14, 20, 20)
+            : const EdgeInsets.fromLTRB(14, 12, 14, 16);
+    final contentPadding = screenWidth >= 1400
+        ? const EdgeInsets.only(left: 24, right: 40, top: 24, bottom: 24)
+        : screenWidth >= 1000
+            ? const EdgeInsets.only(left: 18, right: 24, top: 20, bottom: 24)
+            : const EdgeInsets.only(left: 12, right: 14, top: 16, bottom: 20);
 
     return PopScope(
       canPop: false,
@@ -2243,12 +2273,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         title: Text(selectedList?.name ?? 'VideoB'),
       ),
       drawer: Drawer(
+        width: drawerWidth,
         child: SafeArea(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+                padding: drawerSectionPadding,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
@@ -2428,7 +2459,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
               ),
               const Divider(height: 1),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+                padding: drawerFooterPadding,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
@@ -2484,117 +2515,133 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
           }
           return KeyEventResult.ignored;
         },
-        child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: <Color>[
-              Color(0xFF07111F),
-              Color(0xFF0D1D33),
-              Color(0xFF081018),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+        child: MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(uiScale),
           ),
-        ),
-        child: SafeArea(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : selectedList == null
-                  ? Center(
-                      child: FilledButton(
-                        onPressed: _showCreateListDialog,
-                        child: const Text('Crea La Prima Lista'),
-                      ),
-                    )
-                  : Scrollbar(
-                      controller: _mainScrollController,
-                      thumbVisibility: true,
-                      trackVisibility: true,
-                      child: ListView(
-                      controller: _mainScrollController,
-                      padding: const EdgeInsets.only(left: 24, right: 40, top: 24, bottom: 24),
-                      children: <Widget>[
-                        _SectionCard(
-                          title: selectedList.name,
-                          subtitle: '',
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: <Color>[
+                  Color(0xFF07111F),
+                  Color(0xFF0D1D33),
+                  Color(0xFF081018),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: SafeArea(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : selectedList == null
+                      ? Center(
+                          child: FilledButton(
+                            onPressed: _showCreateListDialog,
+                            child: const Text('Crea La Prima Lista'),
+                          ),
+                        )
+                      : Scrollbar(
+                          controller: _mainScrollController,
+                          thumbVisibility: true,
+                          trackVisibility: true,
+                          child: ListView(
+                            controller: _mainScrollController,
+                            padding: EdgeInsets.fromLTRB(
+                              contentPadding.left * uiScale,
+                              contentPadding.top * uiScale,
+                              contentPadding.right * uiScale,
+                              contentPadding.bottom * uiScale,
+                            ),
                             children: <Widget>[
-                              if (selectedList.sourceType ==
-                                  _VideoListSourceType.imported) ...<Widget>[
-                                _buildImportedControls(selectedList),
-                                const SizedBox(height: 18),
-                              ],
-                              _buildListMeta(theme, selectedList),
-                              if (selectedList.sourceType ==
-                                      _VideoListSourceType.imported &&
-                                  (_isNowMode || _isScanningNowMode)) ...<Widget>[
-                                const SizedBox(height: 18),
-                                _buildNowModeProgress(theme),
-                              ],
-                              if (selectedList.sourceType ==
-                                      _VideoListSourceType.imported &&
-                                  _crestScanTotal > 0 &&
-                                  _crestScanCompleted < _crestScanTotal &&
-                                  !_crestScanDismissed) ...<Widget>[
-                                const SizedBox(height: 18),
-                                _buildCrestProgress(theme),
-                              ],
-                              const SizedBox(height: 18),
-                              if (_activeEntryName != null) ...<Widget>[
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFF4B942)
-                                        .withValues(alpha: 0.14),
-                                    borderRadius: BorderRadius.circular(18),
-                                    border: Border.all(
-                                      color: const Color(0xFFF4B942)
-                                          .withValues(alpha: 0.35),
-                                    ),
-                                  ),
-                                  child: Row(
-                                    children: <Widget>[
-                                      const Icon(
-                                          Icons.play_circle_fill_rounded),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'Selezionato: $_activeEntryName',
-                                          style: theme.textTheme.titleMedium,
+                              _SectionCard(
+                                title: selectedList.name,
+                                subtitle: '',
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    if (selectedList.sourceType ==
+                                        _VideoListSourceType.imported) ...<Widget>[
+                                      _buildImportedControls(selectedList),
+                                      const SizedBox(height: 18),
+                                    ],
+                                    _buildListMeta(theme, selectedList),
+                                    if (selectedList.sourceType ==
+                                            _VideoListSourceType.imported &&
+                                        (_isNowMode ||
+                                            _isScanningNowMode)) ...<Widget>[
+                                      const SizedBox(height: 18),
+                                      _buildNowModeProgress(theme),
+                                    ],
+                                    if (selectedList.sourceType ==
+                                            _VideoListSourceType.imported &&
+                                        _crestScanTotal > 0 &&
+                                        _crestScanCompleted < _crestScanTotal &&
+                                        !_crestScanDismissed) ...<Widget>[
+                                      const SizedBox(height: 18),
+                                      _buildCrestProgress(theme),
+                                    ],
+                                    const SizedBox(height: 18),
+                                    if (_activeEntryName != null) ...<Widget>[
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(14),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFF4B942)
+                                              .withValues(alpha: 0.14),
+                                          borderRadius:
+                                              BorderRadius.circular(18),
+                                          border: Border.all(
+                                            color: const Color(0xFFF4B942)
+                                                .withValues(alpha: 0.35),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: <Widget>[
+                                            const Icon(
+                                              Icons.play_circle_fill_rounded,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Text(
+                                                'Selezionato: $_activeEntryName',
+                                                style:
+                                                    theme.textTheme.titleMedium,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
+                                      const SizedBox(height: 18),
                                     ],
-                                  ),
+                                    if (selectedList.sourceType ==
+                                        _VideoListSourceType.manual)
+                                      _buildManualEditor(theme),
+                                  ],
                                 ),
-                                const SizedBox(height: 18),
-                              ],
-                              if (selectedList.sourceType ==
-                                  _VideoListSourceType.manual)
-                                _buildManualEditor(theme),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        if (_filteredEntries.isEmpty)
-                          Text(
-                            selectedList.entries.isEmpty
-                                ? (selectedList.sourceType ==
-                                        _VideoListSourceType.manual
-                                    ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
-                                    : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
-                                : 'Nessun risultato per i filtri selezionati.',
-                            style: theme.textTheme.bodyLarge?.copyWith(
-                              color: Colors.white70,
-                            ),
-                          )
-                        else
-                          selectedList.sourceType ==
+                              ),
+                              const SizedBox(height: 20),
+                              if (_filteredEntries.isEmpty)
+                                Text(
+                                  selectedList.entries.isEmpty
+                                      ? (selectedList.sourceType ==
+                                              _VideoListSourceType.manual
+                                          ? 'Nessun link ancora. Aggiungi una voce dal form sopra.'
+                                          : 'Nessun link importato ancora. Usa "Aggiorna Lista".')
+                                      : 'Nessun risultato per i filtri selezionati.',
+                                  style: theme.textTheme.bodyLarge?.copyWith(
+                                    color: Colors.white70,
+                                  ),
+                                )
+                              else if (selectedList.sourceType ==
                                       _VideoListSourceType.imported &&
-                                  _isNowMode
-                              ? _buildEntryGrid(selectedList, _uniqueNowModeEntries)
-                              : Column(
+                                  _isNowMode)
+                                _buildEntryGrid(
+                                  selectedList,
+                                  _uniqueNowModeEntries,
+                                )
+                              else
+                                Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: _groupedFilteredEntries.expand(
                                     (MapEntry<String, List<_VideoEntry>> group) {
@@ -2613,7 +2660,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                               const SizedBox(width: 8),
                                               Text(
                                                 group.key,
-                                                style: theme.textTheme.headlineSmall
+                                                style: theme
+                                                    .textTheme.headlineSmall
                                                     ?.copyWith(
                                                   fontWeight: FontWeight.w700,
                                                 ),
@@ -2626,12 +2674,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                     },
                                   ).toList(),
                                 ),
-                      ],
-                    ),
-                  ),
+                            ],
+                          ),
+                        ),
+            ),
+          ),
         ),
         ),
-      ),
       ),
     );
   }
@@ -3034,11 +3083,29 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   Widget _buildEntryGrid(_VideoList list, List<_VideoEntry> entries) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        const spacing = 14.0;
+        final spacing = _isAmazonFireTv ? 10.0 : 14.0;
         final maxWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : MediaQuery.of(context).size.width;
-        final columnCount = math.max(1, (maxWidth / 270).floor());
+        final targetCardWidth = _isAmazonFireTv
+            ? switch (maxWidth) {
+                >= 1500 => 220.0,
+                >= 1200 => 190.0,
+                >= 950 => 172.0,
+                >= 760 => 156.0,
+                _ => 138.0,
+              }
+            : switch (maxWidth) {
+                >= 1500 => 270.0,
+                >= 1200 => 240.0,
+                >= 950 => 210.0,
+                >= 760 => 185.0,
+                _ => 160.0,
+              };
+        final columnCount = math.max(
+          1,
+          ((maxWidth + spacing) / (targetCardWidth + spacing)).floor(),
+        );
         final cardSize =
             (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
         final tileAspectRatio =
@@ -3125,6 +3192,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     final sportBg = _sportBackground(entry.sportLabel);
+    final tilePadding = _isAmazonFireTv ? 13.0 : 18.0;
+    final scheduleFontSize = _isAmazonFireTv ? 18.0 : 24.0;
+    final titleFontSize = _isAmazonFireTv ? 15.0 : 18.0;
+    final metaFontSize = _isAmazonFireTv ? 11.0 : 13.0;
+    final backgroundIconSize = _isAmazonFireTv ? 108.0 : 140.0;
     final isFocused =
         _focusedEntryId == entry.id || _activeEntryId == entry.id;
     final borderColor = isFocused
@@ -3177,7 +3249,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 width: isFocused ? 2 : 1,
               ),
             ),
-            padding: const EdgeInsets.all(18),
+            padding: EdgeInsets.all(tilePadding),
             child: Stack(
               children: <Widget>[
                 if (backgroundSportIcon != null)
@@ -3187,7 +3259,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     child: IgnorePointer(
                       child: Icon(
                         backgroundSportIcon,
-                        size: 140,
+                        size: backgroundIconSize,
                         color: Colors.white.withValues(alpha: 0.10),
                       ),
                     ),
@@ -3207,8 +3279,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                   scheduleLabel,
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 24,
+                                  style: TextStyle(
+                                    fontSize: scheduleFontSize,
                                     fontWeight: FontWeight.w800,
                                     letterSpacing: -0.8,
                                     color: Colors.white,
@@ -3236,8 +3308,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                         child: Text(
                                           entry.sportLabel!,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 13,
+                                          style: TextStyle(
+                                            fontSize: metaFontSize,
                                             color: Colors.white,
                                           ),
                                         ),
@@ -3261,8 +3333,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         entry.name,
                         maxLines: 4,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 18,
+                        style: TextStyle(
+                          fontSize: titleFontSize,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
                           height: 1.25,
@@ -3275,7 +3347,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: metaFontSize,
                           color: Colors.white.withValues(alpha: 0.65),
                         ),
                       ),
@@ -3296,8 +3368,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                           channelSummary,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 13,
+                          style: TextStyle(
+                            fontSize: metaFontSize,
                             fontWeight: FontWeight.w600,
                             color: Colors.white,
                           ),

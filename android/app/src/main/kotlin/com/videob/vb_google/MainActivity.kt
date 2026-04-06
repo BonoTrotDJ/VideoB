@@ -143,6 +143,21 @@ class MainActivity : FlutterActivity() {
                     result.success(DnsVpnService.isActive())
                 }
 
+                "isAmazonFireTv" -> {
+                    val manufacturer = Build.MANUFACTURER.orEmpty()
+                    val brand = Build.BRAND.orEmpty()
+                    val model = Build.MODEL.orEmpty()
+                    val product = Build.PRODUCT.orEmpty()
+                    val fingerprint = Build.FINGERPRINT.orEmpty()
+                    val isAmazonDevice =
+                        manufacturer.contains("amazon", ignoreCase = true) ||
+                            brand.contains("amazon", ignoreCase = true) ||
+                            model.startsWith("AFT", ignoreCase = true) ||
+                            product.startsWith("AFT", ignoreCase = true) ||
+                            fingerprint.contains("amazon", ignoreCase = true)
+                    result.success(isAmazonDevice)
+                }
+
                 else -> result.notImplemented()
             }
         }

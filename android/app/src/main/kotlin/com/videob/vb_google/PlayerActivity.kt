@@ -11,6 +11,7 @@ import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -165,6 +166,28 @@ class PlayerActivity : Activity() {
                 } catch (_: Exception) { true }
             }
 
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?,
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    showConnectionError()
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?,
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
+                    showConnectionError()
+                }
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 loadingOverlay.visibility = View.GONE
@@ -175,9 +198,11 @@ class PlayerActivity : Activity() {
     }
 
     private fun loadSource(url: String) {
+        webView.visibility = View.VISIBLE
         loadingOverlay.visibility = View.VISIBLE
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
+        statusView.textSize = 18f
         statusView.text = if (dohEnabled) "Caricamento con DNS 1.1.1.1..." else "Caricamento..."
 
         if (StreamExtractor.looksLikeDirectMedia(url)) {
@@ -209,6 +234,22 @@ class PlayerActivity : Activity() {
                 "Origin" to "https://sportsonline.si",
             ),
         )
+    }
+
+    private fun showConnectionError() {
+        webView.stopLoading()
+        webView.loadDataWithBaseURL(
+            null,
+            "<html><body style='background:#000'></body></html>",
+            "text/html",
+            "utf-8",
+            null,
+        )
+        progressBar.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusView.textSize = 22f
+        statusView.text = "Errore Connessione"
+        loadingOverlay.visibility = View.VISIBLE
     }
 
     private fun guessMimeType(url: String): String =
@@ -364,10 +405,39 @@ class PlayerActivity : Activity() {
                   transition: opacity 0.2s;
                 }
                 #seek-feedback.show { opacity: 1; }
+                #error-message {
+                  position: fixed;
+                  inset: 0;
+                  display: none;
+                  align-items: center;
+                  justify-content: center;
+                  flex-direction: column;
+                  gap: 16px;
+                  background: rgba(0,0,0,0.92);
+                  color: #fff;
+                  font-size: 22px;
+                  text-align: center;
+                  z-index: 9999;
+                }
+                #error-message .icon {
+                  width: 64px;
+                  height: 64px;
+                  border: 2px solid #fff;
+                  border-radius: 999px;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  font-size: 34px;
+                  font-weight: 700;
+                }
               </style>
             </head>
             <body>
               <video id="v" autoplay playsinline src="$url"></video>
+              <div id="error-message">
+                <div class="icon">!</div>
+                <div>errore connessione</div>
+              </div>
 
               <div id="seek-feedback"></div>
 
@@ -392,6 +462,7 @@ class PlayerActivity : Activity() {
                 const btnBack = document.getElementById('btn-back');
                 const btnFwd = document.getElementById('btn-fwd');
                 const seekFeedback = document.getElementById('seek-feedback');
+                const errorMessage = document.getElementById('error-message');
                 let hideTimer = null;
 
                 function fmt(s) {
@@ -442,6 +513,19 @@ class PlayerActivity : Activity() {
                 });
 
                 v.addEventListener('click', togglePlay);
+                v.addEventListener('error', function() {
+                  errorMessage.style.display = 'flex';
+                  controls.classList.remove('visible');
+                });
+                v.addEventListener('stalled', function() {
+                  if (v.readyState === 0) {
+                    errorMessage.style.display = 'flex';
+                    controls.classList.remove('visible');
+                  }
+                });
+                v.addEventListener('canplay', function() {
+                  errorMessage.style.display = 'none';
+                });
 
                 document.addEventListener('keydown', function(e) {
                   switch (e.key) {
