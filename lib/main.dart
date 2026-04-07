@@ -2573,14 +2573,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                                       const SizedBox(height: 18),
                                       _buildNowModeProgress(theme),
                                     ],
-                                    if (selectedList.sourceType ==
-                                            _VideoListSourceType.imported &&
-                                        _crestScanTotal > 0 &&
-                                        _crestScanCompleted < _crestScanTotal &&
-                                        !_crestScanDismissed) ...<Widget>[
-                                      const SizedBox(height: 18),
-                                      _buildCrestProgress(theme),
-                                    ],
                                     const SizedBox(height: 18),
                                     if (_activeEntryName != null) ...<Widget>[
                                       Container(
