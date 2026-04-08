@@ -39,6 +39,7 @@ object LocalProxyServer {
         originHeader: String? = null,
         cookieHeader: String? = null,
         userAgentHeader: String? = null,
+        sourceUrl: String? = null,
         dohEnabled: Boolean = false,
     ): String {
         val socket = ensureStarted()
@@ -48,6 +49,7 @@ object LocalProxyServer {
             originHeader?.takeIf { it.isNotBlank() }?.let { add("origin=${encodeParam(it)}") }
             cookieHeader?.takeIf { it.isNotBlank() }?.let { add("cookie=${encodeParam(it)}") }
             userAgentHeader?.takeIf { it.isNotBlank() }?.let { add("userAgent=${encodeParam(it)}") }
+            sourceUrl?.takeIf { it.isNotBlank() }?.let { add("source=${encodeParam(it)}") }
             if (dohEnabled) add("doh=1")
         }.joinToString("&")
         val proxyUrl = "http://127.0.0.1:${socket.localPort}/proxy?$queryItems"
@@ -166,6 +168,7 @@ object LocalProxyServer {
             originHeader = params["origin"],
             cookieHeader = params["cookie"],
             userAgentHeader = params["userAgent"],
+            sourceUrl = params["source"],
             dohEnabled = params["doh"] == "1",
         )
     }
@@ -176,34 +179,31 @@ object LocalProxyServer {
         requestHeaders: Map<String, String>,
         headOnly: Boolean,
     ) {
-        val refererHeader = request.refererHeader?.takeIf { it.isNotBlank() } ?: referer
-        val originHeader = request.originHeader?.takeIf { it.isNotBlank() } ?: origin
-        val requestBuilder = Request.Builder()
-            .url(request.targetUrl)
-            .header("User-Agent", request.userAgentHeader?.takeIf { it.isNotBlank() } ?: userAgent)
-            .header("Referer", refererHeader)
-            .header("Origin", originHeader)
-            .header("Accept-Encoding", "identity")
-
-        request.cookieHeader?.takeIf { it.isNotBlank() }?.let {
-            requestBuilder.header("Cookie", it)
-        }
-        requestHeaders["range"]?.let { requestBuilder.header("Range", it) }
-        requestHeaders["accept"]?.let { requestBuilder.header("Accept", it) }
-        if (headOnly) {
-            requestBuilder.head()
-        }
-
-        NetworkClientFactory.get(request.dohEnabled).newCall(requestBuilder.build()).execute().use { upstream ->
+        var effectiveRequest = request
+        executeUpstreamRequest(effectiveRequest, requestHeaders, headOnly).use firstUse@{ initialUpstream ->
+            var upstream = initialUpstream
+            if (upstream.code == 403) {
+                val refreshedRequest = refreshExpiredRequest(effectiveRequest)
+                if (refreshedRequest != null) {
+                    Log.d(
+                        tag,
+                        "Refreshing expired upstream target=${effectiveRequest.targetUrl} source=${effectiveRequest.sourceUrl} refreshed=${refreshedRequest.targetUrl}",
+                    )
+                    upstream.close()
+                    effectiveRequest = refreshedRequest
+                    upstream = executeUpstreamRequest(effectiveRequest, requestHeaders, headOnly)
+                }
+            }
+            upstream.use {
             val statusCode = upstream.code
             val body = upstream.body
-            val contentType = body?.contentType()?.toString() ?: guessContentType(request.targetUrl)
+            val contentType = body?.contentType()?.toString() ?: guessContentType(effectiveRequest.targetUrl)
             val contentRange = upstream.header("Content-Range")
             val acceptRanges = upstream.header("Accept-Ranges")
             val bodyStream = body?.byteStream()
             Log.d(
                 tag,
-                "Upstream response target=${request.targetUrl} status=$statusCode type=$contentType range=${requestHeaders["range"]} doh=${request.dohEnabled}",
+                "Upstream response target=${effectiveRequest.targetUrl} status=$statusCode type=$contentType range=${requestHeaders["range"]} doh=${effectiveRequest.dohEnabled}",
             )
 
             if (bodyStream == null) {
@@ -221,10 +221,10 @@ object LocalProxyServer {
             }
 
             bodyStream.use { stream ->
-                if (!headOnly && isPlaylist(request.targetUrl, contentType)) {
+                if (!headOnly && isPlaylist(effectiveRequest.targetUrl, contentType)) {
                     val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
-                    Log.d(tag, "Playlist fetched target=${request.targetUrl} size=${playlistText.length}")
-                    val rewritten = rewritePlaylist(request, playlistText)
+                    Log.d(tag, "Playlist fetched target=${effectiveRequest.targetUrl} size=${playlistText.length}")
+                    val rewritten = rewritePlaylist(effectiveRequest, playlistText)
                     val bytes = rewritten.toByteArray(StandardCharsets.UTF_8)
                     writeResponse(
                         output = output,
@@ -249,8 +249,35 @@ object LocalProxyServer {
                     )
                 }
             }
+            }
         }
     }
+
+    private fun executeUpstreamRequest(
+        request: ProxyRequest,
+        requestHeaders: Map<String, String>,
+        headOnly: Boolean,
+    ) = NetworkClientFactory.get(request.dohEnabled)
+        .newCall(
+            Request.Builder()
+                .url(request.targetUrl)
+                .header("User-Agent", request.userAgentHeader?.takeIf { it.isNotBlank() } ?: userAgent)
+                .header("Referer", request.refererHeader?.takeIf { it.isNotBlank() } ?: referer)
+                .header("Origin", request.originHeader?.takeIf { it.isNotBlank() } ?: origin)
+                .header("Accept-Encoding", "identity")
+                .apply {
+                    request.cookieHeader?.takeIf { it.isNotBlank() }?.let {
+                        header("Cookie", it)
+                    }
+                    requestHeaders["range"]?.let { header("Range", it) }
+                    requestHeaders["accept"]?.let { header("Accept", it) }
+                    if (headOnly) {
+                        head()
+                    }
+                }
+                .build(),
+        )
+        .execute()
 
     private fun rewritePlaylist(request: ProxyRequest, playlistText: String): String {
         val resolvedBase = URI(request.targetUrl)
@@ -273,12 +300,61 @@ object LocalProxyServer {
                             originHeader = request.originHeader,
                             cookieHeader = request.cookieHeader,
                             userAgentHeader = request.userAgentHeader,
+                            sourceUrl = request.sourceUrl,
                             dohEnabled = request.dohEnabled,
                         )
                     }
                 }
             }
             .joinToString("\n")
+    }
+
+    private fun refreshExpiredRequest(request: ProxyRequest): ProxyRequest? {
+        val sourceUrl = request.sourceUrl?.takeIf { it.isNotBlank() } ?: return null
+        val refreshed = runCatching {
+            StreamExtractor.resolveStream(sourceUrl, request.dohEnabled)
+        }.getOrNull() ?: return null
+        val refreshedReferer = refreshed.refererUrl
+        val refreshedOrigin = runCatching {
+            val uri = URI(refreshedReferer)
+            if (uri.scheme != null && uri.host != null) {
+                "${uri.scheme}://${uri.host}"
+            } else {
+                refreshedReferer
+            }
+        }.getOrDefault(refreshedReferer)
+        val refreshedTarget = rebuildTargetUrl(
+            currentTarget = request.targetUrl,
+            refreshedStreamUrl = refreshed.streamUrl,
+        )
+        return request.copy(
+            targetUrl = refreshedTarget,
+            refererHeader = refreshedReferer,
+            originHeader = refreshedOrigin,
+        )
+    }
+
+    private fun rebuildTargetUrl(
+        currentTarget: String,
+        refreshedStreamUrl: String,
+    ): String {
+        if (looksLikePlaylist(currentTarget)) {
+            return refreshedStreamUrl
+        }
+        return runCatching {
+            val currentUri = URI(currentTarget)
+            val refreshedUri = URI(refreshedStreamUrl)
+            val fileName = currentUri.rawPath.substringAfterLast('/', "")
+            if (fileName.isBlank()) {
+                return@runCatching refreshedStreamUrl
+            }
+            refreshedUri.resolve(fileName).withFallbackQueryFrom(refreshedUri).toString()
+        }.getOrDefault(refreshedStreamUrl)
+    }
+
+    private fun looksLikePlaylist(url: String): Boolean {
+        val lowerUrl = url.lowercase(Locale.ROOT)
+        return lowerUrl.contains(".m3u8")
     }
 
     private fun URI.withFallbackQueryFrom(base: URI): URI {
@@ -382,5 +458,6 @@ private data class ProxyRequest(
     val originHeader: String?,
     val cookieHeader: String?,
     val userAgentHeader: String?,
+    val sourceUrl: String?,
     val dohEnabled: Boolean,
 )

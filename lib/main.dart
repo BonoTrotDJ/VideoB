@@ -1211,10 +1211,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     try {
       final resolved = await _resolvePlayback(rawUrl);
-      final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
-      final externalUrl = playbackUrl.contains('://127.0.0.1')
-          ? '${playbackUrl}${playbackUrl.contains('?') ? '&' : '?'}t=${DateTime.now().millisecondsSinceEpoch}'
-          : playbackUrl;
+      final externalUrl = resolved['playbackUrl'] ?? rawUrl;
       final referer = resolved['referer'] ?? rawUrl;
       await _channel.invokeMethod<void>('openExternalUrl', <String, dynamic>{
         'url': externalUrl,
@@ -2431,43 +2428,6 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 16),
-                    DropdownButtonFormField<_PlayerMode>(
-                      value: _preferredPlayerMode,
-                      decoration: const InputDecoration(
-                        labelText: 'Player',
-                      ),
-                      items: _PlayerMode.values
-                          .map(
-                            (_PlayerMode mode) => DropdownMenuItem<_PlayerMode>(
-                              value: mode,
-                              child: Row(
-                                children: <Widget>[
-                                  Icon(
-                                    mode == _PlayerMode.internal
-                                        ? Icons.tv_rounded
-                                        : Icons.open_in_new_rounded,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(mode.label),
-                                ],
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (_PlayerMode? value) {
-                        if (value == null) {
-                          return;
-                        }
-                        setState(() {
-                          _preferredPlayerMode = value;
-                        });
-                        _persistPlayerMode(value);
-                        Navigator.of(context).pop();
-                      },
-                    ),
-                    const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2505,6 +2465,42 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                           _selectedLanguageFilter =
                               value == null || value.isEmpty ? null : value;
                         });
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<_PlayerMode>(
+                      value: _preferredPlayerMode,
+                      decoration: const InputDecoration(
+                        labelText: 'Player',
+                      ),
+                      items: _PlayerMode.values
+                          .map(
+                            (_PlayerMode mode) => DropdownMenuItem<_PlayerMode>(
+                              value: mode,
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(
+                                    mode == _PlayerMode.internal
+                                        ? Icons.tv_rounded
+                                        : Icons.open_in_new_rounded,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(mode.label),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (_PlayerMode? value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() {
+                          _preferredPlayerMode = value;
+                        });
+                        _persistPlayerMode(value);
                         Navigator.of(context).pop();
                       },
                     ),

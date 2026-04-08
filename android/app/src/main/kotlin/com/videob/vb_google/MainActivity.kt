@@ -69,16 +69,34 @@ class MainActivity : FlutterActivity() {
                     runOnUiThread {
                         try {
                             Log.d(logTag, "openExternalUrl url=$url referer=$referer")
+                            val origin = runCatching {
+                                val uri = URI(referer)
+                                if (uri.scheme != null && uri.host != null) {
+                                    "${uri.scheme}://${uri.host}"
+                                } else {
+                                    ""
+                                }
+                            }.getOrDefault("")
                             val headers = Bundle().apply {
                                 if (referer.isNotBlank()) {
                                     putString("Referer", referer)
                                 }
+                                if (origin.isNotBlank()) {
+                                    putString("Origin", origin)
+                                }
+                                putString(
+                                    "User-Agent",
+                                    "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
+                                        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                                )
                             }
                             val intent = Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(Uri.parse(url), guessMimeType(url))
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                if (referer.isNotBlank()) {
+                                if (headers.size() > 0) {
                                     putExtra("headers", headers)
+                                }
+                                if (referer.isNotBlank()) {
                                     putExtra(Intent.EXTRA_REFERRER, Uri.parse(referer))
                                 }
                             }
@@ -146,6 +164,7 @@ class MainActivity : FlutterActivity() {
                                     targetUrl = resolved.streamUrl,
                                     refererHeader = referer,
                                     originHeader = origin,
+                                    sourceUrl = url,
                                     dohEnabled = dohEnabled,
                                 )
                                 Log.d(
@@ -260,7 +279,9 @@ class MainActivity : FlutterActivity() {
 
     private fun guessMimeType(url: String): String =
         when {
-            url.contains(".m3u8", ignoreCase = true) -> "application/vnd.apple.mpegurl"
+            url.contains(".m3u8", ignoreCase = true) ||
+                url.contains("%2Fm3u8", ignoreCase = true) ||
+                url.contains("%2Em3u8", ignoreCase = true) -> "video/*"
             url.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
             url.contains(".mp4", ignoreCase = true) -> "video/mp4"
             else -> "video/*"
