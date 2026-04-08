@@ -19,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -256,6 +257,10 @@ class PlayerActivity : Activity() {
         val player = ExoPlayer.Builder(this).build()
         exoPlayer = player
         playerView.player = player
+        playerView.useController = true
+        playerView.controllerAutoShow = false
+        playerView.controllerShowTimeoutMs = 5000
+        playerView.requestFocus()
         player.addListener(
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -614,6 +619,56 @@ class PlayerActivity : Activity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(event)
+        exoPlayer?.let { player ->
+            if (playerView.visibility == View.VISIBLE) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER,
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                        if (player.isPlaying) player.pause() else player.play()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                        player.play()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                        player.pause()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT,
+                    KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        val current = player.currentPosition.coerceAtLeast(0L)
+                        player.seekTo((current - 10_000L).coerceAtLeast(0L))
+                        return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT,
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        val duration = player.duration
+                        val current = player.currentPosition.coerceAtLeast(0L)
+                        val target = if (duration == C.TIME_UNSET) {
+                            current + 10_000L
+                        } else {
+                            (current + 10_000L).coerceAtMost(duration)
+                        }
+                        player.seekTo(target)
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MENU,
+                    KeyEvent.KEYCODE_INFO -> {
+                        playerView.showController()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_BACK -> {
+                        if (playerView.isControllerFullyVisible) {
+                            playerView.hideController()
+                            return true
+                        }
+                    }
+                }
+            }
+        }
         when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER,

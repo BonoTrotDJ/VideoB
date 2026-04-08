@@ -9,9 +9,12 @@
         android:id="@+id/player_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
         android:visibility="gone"
         android:background="#000000"
-        app:show_buffering="always" />
+        app:show_buffering="always"
+        app:use_controller="true" />
 
     <WebView
         android:id="@+id/player_webview"

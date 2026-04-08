@@ -722,6 +722,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _channel = MethodChannel('videob/channel');
   static const _listsKey = 'video_lists_v2';
   static const _selectedListKey = 'selected_video_list_v2';
+  static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
   static const _appVersion = '1.0.3+4';
@@ -768,6 +769,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isLoading = true;
   bool _isBusy = false;
   bool _dohEnabled = false;
+  _PlayerMode _preferredPlayerMode = _PlayerMode.internal;
   bool _isAmazonFireTv = false;
   bool _isNowMode = false;
   bool _isScanningNowMode = false;
@@ -780,6 +782,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   String? _status;
 
   static const String _dohKey = 'doh_enabled';
+
+  Future<void> _persistPlayerMode(_PlayerMode mode) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString(_playerModeKey, mode.name);
+  }
 
   _VideoList? get _selectedList {
     for (final list in _videoLists) {
@@ -898,6 +905,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
     final isAmazonFireTv =
         await _channel.invokeMethod<bool>('isAmazonFireTv') ?? false;
+    final storedPlayerMode = preferences.getString(_playerModeKey);
+    final preferredPlayerMode = _PlayerMode.values.firstWhere(
+      (_PlayerMode mode) => mode.name == storedPlayerMode,
+      orElse: () => _PlayerMode.internal,
+    );
     _dohEnabled = nativeDohEnabled || storedDohEnabled;
     await preferences.setBool(_dohKey, _dohEnabled);
     var rawLists = preferences.getString(_listsKey);
@@ -936,6 +948,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     setState(() {
       _isAmazonFireTv = isAmazonFireTv;
+      _preferredPlayerMode = preferredPlayerMode;
       _videoLists = parsedLists;
       _selectedListId = effectiveSelectedId;
       _isLoading = false;
@@ -1063,7 +1076,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     };
   }
 
-  Future<void> _askPlayerMode(
+  Future<void> _openWithPreferredPlayer(
     String url,
     String? entryId,
     String entryName,
@@ -1072,36 +1085,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     if (rawUrl.isEmpty || !mounted) {
       return;
     }
-
-    final action = await showDialog<String>(
-      context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: Text(entryName),
-        content: const Text('Scegli il player'),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Annulla'),
-          ),
-          FilledButton.tonal(
-            onPressed: () => Navigator.of(ctx).pop('external'),
-            child: const Text('Player Esterno'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop('internal'),
-            child: const Text('Player Interno'),
-          ),
-        ],
-      ),
-    );
-
-    if (action == 'external') {
+    if (_preferredPlayerMode == _PlayerMode.external) {
       await _openExternalUrl(rawUrl, entryId: entryId, entryName: entryName);
       return;
     }
-    if (action == 'internal') {
-      await _openUrl(rawUrl, entryId: entryId, entryName: entryName);
-    }
+    await _openUrl(rawUrl, entryId: entryId, entryName: entryName);
   }
 
   Future<void> _openEntryWithChannelPicker(_VideoEntry entry) async {
@@ -1114,7 +1102,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     if (channels.isEmpty) return;
 
     if (channels.length == 1) {
-      await _askPlayerMode(channels.first.url, entry.id, entry.name);
+      await _openWithPreferredPlayer(channels.first.url, entry.id, entry.name);
       return;
     }
 
@@ -1145,7 +1133,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 ),
                 onTap: () {
                   Navigator.of(ctx).pop();
-                  _openUrl(ch.url, entryId: entry.id, entryName: entry.name);
+                  _openWithPreferredPlayer(
+                    ch.url,
+                    entry.id,
+                    entry.name,
+                  );
                 },
               );
             }),
@@ -1220,9 +1212,12 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     try {
       final resolved = await _resolvePlayback(rawUrl);
       final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
+      final externalUrl = playbackUrl.contains('://127.0.0.1')
+          ? '${playbackUrl}${playbackUrl.contains('?') ? '&' : '?'}t=${DateTime.now().millisecondsSinceEpoch}'
+          : playbackUrl;
       final referer = resolved['referer'] ?? rawUrl;
       await _channel.invokeMethod<void>('openExternalUrl', <String, dynamic>{
-        'url': playbackUrl,
+        'url': externalUrl,
         'referer': referer,
       });
       if (!mounted) {
@@ -2437,6 +2432,42 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                       },
                     ),
                     const SizedBox(height: 16),
+                    DropdownButtonFormField<_PlayerMode>(
+                      value: _preferredPlayerMode,
+                      decoration: const InputDecoration(
+                        labelText: 'Player',
+                      ),
+                      items: _PlayerMode.values
+                          .map(
+                            (_PlayerMode mode) => DropdownMenuItem<_PlayerMode>(
+                              value: mode,
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(
+                                    mode == _PlayerMode.internal
+                                        ? Icons.tv_rounded
+                                        : Icons.open_in_new_rounded,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(mode.label),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (_PlayerMode? value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() {
+                          _preferredPlayerMode = value;
+                        });
+                        _persistPlayerMode(value);
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                    const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2609,8 +2640,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
             final box = currentFocus?.context?.findRenderObject() as RenderBox?;
             if (box != null && box.hasSize) {
               final pos = box.localToGlobal(Offset.zero);
-              if (pos.dx < 280) {
-                _menuFocusNode.requestFocus();
+              if (pos.dx < 140) {
+                _scaffoldKey.currentState?.openDrawer();
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    _menuFocusNode.requestFocus();
+                  }
+                });
                 return KeyEventResult.handled;
               }
             }
@@ -3291,8 +3327,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final titleFontSize = _isAmazonFireTv ? 15.0 : 18.0;
     final metaFontSize = _isAmazonFireTv ? 11.0 : 13.0;
     final backgroundIconSize = _isAmazonFireTv ? 108.0 : 140.0;
-    final isFocused =
-        _focusedEntryId == entry.id || _activeEntryId == entry.id;
+    final isFocused = _focusedEntryId == entry.id;
     final borderColor = isFocused
         ? Colors.white
         : Colors.white.withValues(alpha: 0.10);
@@ -3479,8 +3514,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   Widget _buildNowModeEntryTile(_VideoEntry entry) {
-    final isFocused =
-        _focusedEntryId == entry.id || _activeEntryId == entry.id;
+    final isFocused = _focusedEntryId == entry.id;
     final languageLabel = entry.language?.trim() ?? '';
     final backgroundLabel = _nowModeBackgroundLabel(entry);
     final borderColor = isFocused
@@ -4108,6 +4142,15 @@ class _CreateListDialogResult {
   final String name;
   final _VideoListSourceType sourceType;
   final String sourceUrl;
+}
+
+enum _PlayerMode { internal, external }
+
+extension on _PlayerMode {
+  String get label => switch (this) {
+        _PlayerMode.internal => 'Player interno',
+        _PlayerMode.external => 'Player esterno',
+      };
 }
 
 class _CreateListPage extends StatefulWidget {
