@@ -5,6 +5,7 @@ import android.app.Activity
 import android.graphics.Color
 import android.view.KeyEvent
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
@@ -18,14 +19,23 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import java.io.FilterInputStream
 import okhttp3.Request
 
 class PlayerActivity : Activity() {
+    private val logTag = "VideoBPlayer"
     private lateinit var webView: WebView
+    private lateinit var playerView: PlayerView
     private lateinit var statusView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var loadingOverlay: View
+    private var exoPlayer: ExoPlayer? = null
     private var dohEnabled: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,6 +43,7 @@ class PlayerActivity : Activity() {
         setContentView(R.layout.activity_player)
 
         webView = findViewById(R.id.player_webview)
+        playerView = findViewById(R.id.player_view)
         statusView = findViewById(R.id.player_status)
         progressBar = findViewById(R.id.player_progress)
         loadingOverlay = findViewById(R.id.player_loading_overlay)
@@ -198,7 +209,9 @@ class PlayerActivity : Activity() {
     }
 
     private fun loadSource(url: String) {
+        releasePlayer()
         webView.visibility = View.VISIBLE
+        playerView.visibility = View.GONE
         loadingOverlay.visibility = View.VISIBLE
         progressBar.visibility = View.VISIBLE
         statusView.visibility = View.VISIBLE
@@ -206,24 +219,7 @@ class PlayerActivity : Activity() {
         statusView.text = if (dohEnabled) "Caricamento con DNS 1.1.1.1..." else "Caricamento..."
 
         if (StreamExtractor.looksLikeDirectMedia(url)) {
-            val mediaUrl = if (dohEnabled) {
-                LocalProxyServer.proxyUrl(
-                    targetUrl = url,
-                    refererHeader = "https://sportsonline.si/",
-                    originHeader = "https://sportsonline.si",
-                    userAgentHeader = webView.settings.userAgentString,
-                    dohEnabled = true,
-                )
-            } else {
-                url
-            }
-            webView.loadDataWithBaseURL(
-                url,
-                videoHtml(mediaUrl),
-                "text/html",
-                "utf-8",
-                null,
-            )
+            startNativePlayback(url)
             return
         }
 
@@ -237,6 +233,7 @@ class PlayerActivity : Activity() {
     }
 
     private fun showConnectionError() {
+        releasePlayer()
         webView.stopLoading()
         webView.loadDataWithBaseURL(
             null,
@@ -250,6 +247,60 @@ class PlayerActivity : Activity() {
         statusView.textSize = 22f
         statusView.text = "Errore Connessione"
         loadingOverlay.visibility = View.VISIBLE
+    }
+
+    private fun startNativePlayback(url: String) {
+        Log.d(logTag, "startNativePlayback url=$url")
+        webView.visibility = View.GONE
+        playerView.visibility = View.VISIBLE
+        val player = ExoPlayer.Builder(this).build()
+        exoPlayer = player
+        playerView.player = player
+        player.addListener(
+            object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        loadingOverlay.visibility = View.GONE
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(logTag, "native playback error url=$url", error)
+                    showConnectionError()
+                }
+            },
+        )
+        val mimeType = when {
+            url.contains(".m3u8", ignoreCase = true) ||
+                url.contains("%2Fm3u8", ignoreCase = true) ||
+                url.contains("%2Em3u8", ignoreCase = true) ->
+                MimeTypes.APPLICATION_M3U8
+            url.contains(".mpd", ignoreCase = true) ||
+                url.contains("%2Empd", ignoreCase = true) ->
+                MimeTypes.APPLICATION_MPD
+            url.contains(".mp4", ignoreCase = true) ||
+                url.contains("%2Emp4", ignoreCase = true) ->
+                MimeTypes.VIDEO_MP4
+            else -> null
+        }
+        val mediaItem = MediaItem.Builder()
+            .setUri(url)
+            .apply {
+                if (mimeType != null) {
+                    setMimeType(mimeType)
+                }
+            }
+            .build()
+        Log.d(logTag, "startNativePlayback mimeType=$mimeType url=$url")
+        player.setMediaItem(mediaItem)
+        player.prepare()
+        player.playWhenReady = true
+    }
+
+    private fun releasePlayer() {
+        exoPlayer?.release()
+        exoPlayer = null
+        playerView.player = null
     }
 
     private fun guessMimeType(url: String): String =
@@ -618,6 +669,7 @@ class PlayerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        releasePlayer()
         val parent = webView.parent
         if (parent is ViewGroup) {
             parent.removeView(webView)

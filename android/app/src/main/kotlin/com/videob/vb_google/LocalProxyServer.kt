@@ -50,8 +50,7 @@ object LocalProxyServer {
             userAgentHeader?.takeIf { it.isNotBlank() }?.let { add("userAgent=${encodeParam(it)}") }
             if (dohEnabled) add("doh=1")
         }.joinToString("&")
-        val host = resolveHostAddress()
-        val proxyUrl = "http://$host:${socket.localPort}/proxy?$queryItems"
+        val proxyUrl = "http://127.0.0.1:${socket.localPort}/proxy?$queryItems"
         Log.d(tag, "Proxy URL generated for target=$targetUrl via=$proxyUrl")
         return proxyUrl
     }
@@ -121,9 +120,14 @@ object LocalProxyServer {
                     return
                 }
 
+                Log.d(
+                    tag,
+                    "Proxy request target=${proxyRequest!!.targetUrl} referer=${proxyRequest.refererHeader} doh=${proxyRequest.dohEnabled}",
+                )
+
                 proxyRequest(
                     output = socket.getOutputStream(),
-                    request = proxyRequest!!,
+                    request = proxyRequest,
                     requestHeaders = headers,
                     headOnly = method == "HEAD",
                 )
@@ -219,6 +223,7 @@ object LocalProxyServer {
             bodyStream.use { stream ->
                 if (!headOnly && isPlaylist(request.targetUrl, contentType)) {
                     val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
+                    Log.d(tag, "Playlist fetched target=${request.targetUrl} size=${playlistText.length}")
                     val rewritten = rewritePlaylist(request, playlistText)
                     val bytes = rewritten.toByteArray(StandardCharsets.UTF_8)
                     writeResponse(
@@ -261,9 +266,10 @@ object LocalProxyServer {
                             .resolve(trimmed)
                             .withFallbackQueryFrom(resolvedBase)
                             .toString()
+                        Log.d(tag, "Rewrite playlist item base=${request.targetUrl} item=$trimmed absolute=$absolute")
                         proxyUrl(
                             targetUrl = absolute,
-                            refererHeader = request.targetUrl,
+                            refererHeader = request.refererHeader,
                             originHeader = request.originHeader,
                             cookieHeader = request.cookieHeader,
                             userAgentHeader = request.userAgentHeader,
@@ -365,24 +371,6 @@ object LocalProxyServer {
             body = ByteArrayInputStream(bytes),
             headOnly = false,
         )
-    }
-
-    private fun resolveHostAddress(): String {
-        return try {
-            NetworkInterface.getNetworkInterfaces()
-                ?.toList()
-                .orEmpty()
-                .flatMap { it.inetAddresses.toList() }
-                .firstOrNull { address ->
-                    !address.isLoopbackAddress &&
-                        address.hostAddress?.contains(':') == false &&
-                        address.isSiteLocalAddress
-                }
-                ?.hostAddress
-                ?: "127.0.0.1"
-        } catch (_: Exception) {
-            "127.0.0.1"
-        }
     }
 
     private fun encodeParam(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.name())

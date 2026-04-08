@@ -1045,8 +1045,63 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _persistLists();
   }
 
-  Future<void> _askPlayerMode(String url, String? entryId, String entryName) async {
-    await _openUrl(url, entryId: entryId, entryName: entryName);
+  Future<Map<String, String>> _resolvePlayback(String url) async {
+    final rawUrl = url.trim();
+    final resolved = await _channel.invokeMethod<dynamic>(
+      'resolveStream',
+      <String, dynamic>{'url': rawUrl, 'dohEnabled': false},
+    );
+    return <String, String>{
+      'playbackUrl':
+          (resolved is Map ? resolved['playbackUrl']?.toString() : null) ??
+              rawUrl,
+      'resolvedUrl':
+          (resolved is Map ? resolved['resolvedUrl']?.toString() : null) ??
+              rawUrl,
+      'referer':
+          (resolved is Map ? resolved['referer']?.toString() : null) ?? rawUrl,
+    };
+  }
+
+  Future<void> _askPlayerMode(
+    String url,
+    String? entryId,
+    String entryName,
+  ) async {
+    final rawUrl = url.trim();
+    if (rawUrl.isEmpty || !mounted) {
+      return;
+    }
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        title: Text(entryName),
+        content: const Text('Scegli il player'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Annulla'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(ctx).pop('external'),
+            child: const Text('Player Esterno'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop('internal'),
+            child: const Text('Player Interno'),
+          ),
+        ],
+      ),
+    );
+
+    if (action == 'external') {
+      await _openExternalUrl(rawUrl, entryId: entryId, entryName: entryName);
+      return;
+    }
+    if (action == 'internal') {
+      await _openUrl(rawUrl, entryId: entryId, entryName: entryName);
+    }
   }
 
   Future<void> _openEntryWithChannelPicker(_VideoEntry entry) async {
@@ -1120,8 +1175,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     try {
+      final resolved = await _resolvePlayback(rawUrl);
+      final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
+      final resolvedUrl = resolved['resolvedUrl'] ?? rawUrl;
       await _channel.invokeMethod<void>('openUrl', <String, dynamic>{
-        'url': rawUrl,
+        'url': playbackUrl,
         'dohEnabled': false,
       });
       if (!mounted) {
@@ -1132,7 +1190,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         _activeEntryName = entryName;
         _status = entryName == null
             ? 'Apertura player interno...'
-            : 'In riproduzione: $entryName';
+            : resolvedUrl != rawUrl
+                ? 'Stream risolto: $entryName'
+                : 'In riproduzione: $entryName';
       });
     } on PlatformException catch (error) {
       if (!mounted) {
@@ -1140,6 +1200,48 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
       setState(() {
         _status = error.message ?? 'Errore durante l\'apertura del player.';
+      });
+    }
+  }
+
+  Future<void> _openExternalUrl(
+    String url, {
+    String? entryId,
+    String? entryName,
+  }) async {
+    final rawUrl = url.trim();
+    if (rawUrl.isEmpty) {
+      setState(() {
+        _status = 'Inserisci un URL valido.';
+      });
+      return;
+    }
+
+    try {
+      final resolved = await _resolvePlayback(rawUrl);
+      final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
+      final referer = resolved['referer'] ?? rawUrl;
+      await _channel.invokeMethod<void>('openExternalUrl', <String, dynamic>{
+        'url': playbackUrl,
+        'referer': referer,
+      });
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _activeEntryId = entryId;
+        _activeEntryName = entryName;
+        _status = entryName == null
+            ? 'Apertura player esterno...'
+            : 'Player esterno: $entryName';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _status =
+            error.message ?? 'Errore durante l\'apertura del player esterno.';
       });
     }
   }

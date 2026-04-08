@@ -3,12 +3,15 @@ package com.videob.vb_google
 import android.app.AlertDialog
 import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
 import android.net.VpnService
 import android.text.InputType
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.os.Bundle
+import android.util.Log
 import android.util.TypedValue
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -17,9 +20,11 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.net.URI
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+    private val logTag = "VideoBMain"
     private val channelName = "videob/channel"
     private val executor = Executors.newSingleThreadExecutor()
     private val backupFileName = "videob_lists_backup.json"
@@ -48,8 +53,45 @@ class MainActivity : FlutterActivity() {
                         putExtra(PlayerActivity.EXTRA_URL, url)
                         putExtra(PlayerActivity.EXTRA_DOH_ENABLED, dohEnabled)
                     }
+                    Log.d(logTag, "openUrl url=$url doh=$dohEnabled")
                     startActivity(intent)
                     result.success(null)
+                }
+
+                "openExternalUrl" -> {
+                    val url = call.argument<String>("url")?.trim().orEmpty()
+                    val referer = call.argument<String>("referer")?.trim().orEmpty()
+                    if (url.isBlank()) {
+                        result.error("invalid_url", "URL non valido.", null)
+                        return@setMethodCallHandler
+                    }
+
+                    runOnUiThread {
+                        try {
+                            Log.d(logTag, "openExternalUrl url=$url referer=$referer")
+                            val headers = Bundle().apply {
+                                if (referer.isNotBlank()) {
+                                    putString("Referer", referer)
+                                }
+                            }
+                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(Uri.parse(url), guessMimeType(url))
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                if (referer.isNotBlank()) {
+                                    putExtra("headers", headers)
+                                    putExtra(Intent.EXTRA_REFERRER, Uri.parse(referer))
+                                }
+                            }
+                            startActivity(Intent.createChooser(intent, "Apri con"))
+                            result.success(true)
+                        } catch (error: Exception) {
+                            result.error(
+                                "external_open_failed",
+                                error.message ?: "Nessun player esterno disponibile.",
+                                null,
+                            )
+                        }
+                    }
                 }
 
                 "extractLinks" -> {
@@ -69,6 +111,59 @@ class MainActivity : FlutterActivity() {
                                 result.error(
                                     "extract_failed",
                                     error.message ?: "Analisi fallita.",
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                "resolveStream" -> {
+                    val url = call.argument<String>("url")?.trim().orEmpty()
+                    val dohEnabled = call.argument<Boolean>("dohEnabled") == true
+                    if (url.isBlank()) {
+                        result.error("invalid_url", "URL non valido.", null)
+                        return@setMethodCallHandler
+                    }
+
+                    executor.execute {
+                        try {
+                            val resolved = StreamExtractor.resolveStream(url, dohEnabled)
+                            val payload = if (resolved == null) {
+                                Log.d(logTag, "resolveStream fallback source=$url")
+                                mapOf(
+                                    "playbackUrl" to url,
+                                    "resolvedUrl" to url,
+                                    "referer" to url,
+                                )
+                            } else {
+                                val referer = resolved.refererUrl
+                                val origin = runCatching {
+                                    val uri = URI(referer)
+                                    "${uri.scheme}://${uri.host}"
+                                }.getOrElse { referer }
+                                val playbackUrl = LocalProxyServer.proxyUrl(
+                                    targetUrl = resolved.streamUrl,
+                                    refererHeader = referer,
+                                    originHeader = origin,
+                                    dohEnabled = dohEnabled,
+                                )
+                                Log.d(
+                                    logTag,
+                                    "resolveStream success source=$url resolved=${resolved.streamUrl} referer=$referer playback=$playbackUrl",
+                                )
+                                mapOf(
+                                    "playbackUrl" to playbackUrl,
+                                    "resolvedUrl" to resolved.streamUrl,
+                                    "referer" to referer,
+                                )
+                            }
+                            runOnUiThread { result.success(payload) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "resolve_failed",
+                                    error.message ?: "Risoluzione stream fallita.",
                                     null,
                                 )
                             }
@@ -162,6 +257,14 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    private fun guessMimeType(url: String): String =
+        when {
+            url.contains(".m3u8", ignoreCase = true) -> "application/vnd.apple.mpegurl"
+            url.contains(".mpd", ignoreCase = true) -> "application/dash+xml"
+            url.contains(".mp4", ignoreCase = true) -> "video/mp4"
+            else -> "video/*"
+        }
 
     private fun handleDnsVpnToggle(enabled: Boolean, result: MethodChannel.Result) {
         if (!enabled) {

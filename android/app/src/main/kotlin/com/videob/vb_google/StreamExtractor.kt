@@ -4,11 +4,18 @@ import java.io.BufferedInputStream
 import java.net.URI
 import java.util.LinkedHashSet
 import java.util.regex.Pattern
+import android.util.Log
 import okhttp3.Request
 
 object StreamExtractor {
+    private const val tag = "VideoBResolve"
     private val iframePattern =
         Pattern.compile("""<iframe[^>]+src=["']([^"']+)["']""", Pattern.CASE_INSENSITIVE)
+    private val streamPattern =
+        Pattern.compile(
+            """(?:["']?(?:file|src|source|hlsUrl|streamUrl)["']?\s*[:=]\s*|var\s+src\s*=\s*)["']?(https?:\/\/[^"'>\s]+(?:\.m3u8|\.mp4)[^"'>\s]*)""",
+            Pattern.CASE_INSENSITIVE,
+        )
     private val mediaPattern =
         Pattern.compile(
             """https?:\/\/[^"'\\\s)]+(?:m3u8|mpd|mp4|mkv|webm)(?:\?[^"'\\\s)]*)?""",
@@ -18,7 +25,7 @@ object StreamExtractor {
         Pattern.compile("""https?:\/\/[^"'\\\s<>()]+""", Pattern.CASE_INSENSITIVE)
 
     fun extractLinks(sourceUrl: String, useDoh: Boolean = false): List<String> {
-        val html = download(sourceUrl, useDoh)
+        val html = download(sourceUrl, useDoh, sourceUrl)
         val links = LinkedHashSet<String>()
 
         collectMatches(iframePattern, html, sourceUrl, links)
@@ -82,7 +89,64 @@ object StreamExtractor {
             normalized.contains(".mkv")
     }
 
-    private fun download(url: String, useDoh: Boolean): String {
+    fun resolveStream(sourceUrl: String, useDoh: Boolean = false): ResolvedStream? {
+        Log.d(tag, "resolve start source=$sourceUrl doh=$useDoh")
+        if (looksLikeDirectMedia(sourceUrl)) {
+            Log.d(tag, "resolve direct media source=$sourceUrl")
+            return ResolvedStream(
+                streamUrl = sourceUrl,
+                refererUrl = sourceUrl,
+            )
+        }
+
+        val html = download(sourceUrl, useDoh, sourceUrl)
+        extractFirstStreamUrl(html)?.let { streamUrl ->
+            Log.d(tag, "resolve stream found on source page stream=$streamUrl referer=$sourceUrl")
+            return ResolvedStream(
+                streamUrl = streamUrl,
+                refererUrl = sourceUrl,
+            )
+        }
+
+        val iframeUrl = extractFirstIframeUrl(html, sourceUrl) ?: return null
+        Log.d(tag, "resolve iframe found iframe=$iframeUrl source=$sourceUrl")
+        val embedHtml = download(iframeUrl, useDoh, sourceUrl)
+        extractFirstStreamUrl(embedHtml)?.let { streamUrl ->
+            Log.d(tag, "resolve stream found on embed stream=$streamUrl referer=$iframeUrl")
+            return ResolvedStream(
+                streamUrl = streamUrl,
+                refererUrl = iframeUrl,
+            )
+        }
+
+        Log.d(tag, "resolve failed source=$sourceUrl iframe=$iframeUrl")
+        return null
+    }
+
+    private fun extractFirstStreamUrl(html: String): String? {
+        val matcher = streamPattern.matcher(html)
+        while (matcher.find()) {
+            val candidate = matcher.group(1) ?: continue
+            if (isUseful(candidate)) {
+                return candidate
+            }
+        }
+        return null
+    }
+
+    private fun extractFirstIframeUrl(html: String, sourceUrl: String): String? {
+        val matcher = iframePattern.matcher(html)
+        while (matcher.find()) {
+            val candidate = matcher.group(1) ?: continue
+            val normalized = normalizeUrl(sourceUrl, candidate)
+            if (normalized != null && isUseful(normalized)) {
+                return normalized
+            }
+        }
+        return null
+    }
+
+    private fun download(url: String, useDoh: Boolean, refererUrl: String): String {
         val request = Request.Builder()
             .url(url)
             .header(
@@ -90,7 +154,7 @@ object StreamExtractor {
                 "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
                     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             )
-            .header("Referer", "https://sportsonline.si/")
+            .header("Referer", refererUrl)
             .build()
 
         NetworkClientFactory.get(useDoh).newCall(request).execute().use { response ->
@@ -104,3 +168,8 @@ object StreamExtractor {
         }
     }
 }
+
+data class ResolvedStream(
+    val streamUrl: String,
+    val refererUrl: String,
+)
