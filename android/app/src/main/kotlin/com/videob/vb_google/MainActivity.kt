@@ -94,9 +94,6 @@ class MainActivity : FlutterActivity() {
                             val intent = Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(Uri.parse(url), guessMimeType(url))
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                if (packageName.isNotBlank()) {
-                                    setPackage(packageName)
-                                }
                                 if (headers.size() > 0) {
                                     putExtra("headers", headers)
                                 }
@@ -105,7 +102,20 @@ class MainActivity : FlutterActivity() {
                                 }
                             }
                             val launchIntent = if (packageName.isNotBlank()) {
-                                intent
+                                val resolvedActivity = packageManager.queryIntentActivities(
+                                    intent.apply { setPackage(packageName) },
+                                    0,
+                                ).firstOrNull()?.activityInfo
+                                if (resolvedActivity != null) {
+                                    intent.apply {
+                                        setClassName(
+                                            resolvedActivity.packageName,
+                                            resolvedActivity.name,
+                                        )
+                                    }
+                                } else {
+                                    intent.apply { setPackage(packageName) }
+                                }
                             } else {
                                 Intent.createChooser(intent, "Apri con").apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

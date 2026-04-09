@@ -725,7 +725,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.3+4';
+  static const _appVersion = '1.0.4+5';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -907,9 +907,34 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     final seenUrls = <String>{};
 
     for (final entry in _filteredEntries) {
-      final normalizedUrl = _normalizedEntryPreviewSourceUrl(entry);
-      if (normalizedUrl.isEmpty || seenUrls.add(normalizedUrl)) {
-        uniqueEntries.add(entry);
+      final channels = entry.channels.isNotEmpty
+          ? entry.channels
+          : <_VideoChannel>[
+              _VideoChannel(
+                url: entry.url,
+                label: _channelLabel(entry.url),
+                language: entry.language ?? '',
+              ),
+            ];
+
+      for (var i = 0; i < channels.length; i++) {
+        final channel = channels[i];
+        final normalizedUrl = channel.url.trim().toLowerCase();
+        if (normalizedUrl.isEmpty || !seenUrls.add(normalizedUrl)) {
+          continue;
+        }
+        uniqueEntries.add(
+          _VideoEntry(
+            id: '${entry.id}::${i + 1}',
+            name: entry.name,
+            url: channel.url,
+            eventTime: entry.eventTime,
+            dayLabel: entry.dayLabel,
+            language: channel.language,
+            sportLabel: entry.sportLabel,
+            channels: <_VideoChannel>[channel],
+          ),
+        );
       }
     }
 
@@ -1530,10 +1555,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   }
 
   List<_ImportedScheduleEvent> _parsePlainTextSchedule(String raw) {
-    final results = <_ImportedScheduleEvent>[];
+    final grouped = <String, _ImportedScheduleAccumulator>{};
+    final orderedKeys = <String>[];
     String? currentDayLabel;
-    var dayIndex = _currentDayIndex();
-    String? previousTime;
 
     for (final rawLine in raw.split(RegExp(r'\r?\n'))) {
       final line = rawLine.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -1563,31 +1587,50 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       }
 
       final time = _shiftEventTime(rawTime);
+      final key = '${time.toLowerCase()}|${title.toLowerCase()}';
       final language = _extractLanguageFromUrl(url) ?? 'Lingua non indicata';
-      if (currentDayLabel == null &&
+
+      if (!grouped.containsKey(key)) {
+        grouped[key] = _ImportedScheduleAccumulator(
+          title: title,
+          eventTime: time,
+          sportLabel: _detectSportFromName(title),
+          dayLabel: currentDayLabel,
+        );
+        orderedKeys.add(key);
+      }
+
+      grouped[key]!.addChannel(url, _channelLabel(url), language);
+    }
+
+    final results = <_ImportedScheduleEvent>[];
+    var dayIndex = _currentDayIndex();
+    String? previousTime;
+
+    for (final key in orderedKeys) {
+      final event = grouped[key];
+      if (event == null) {
+        continue;
+      }
+
+      if (event.dayLabel == null &&
           previousTime != null &&
-          time.compareTo(previousTime) < 0) {
+          event.eventTime.compareTo(previousTime) < 0) {
         dayIndex = (dayIndex + 1) % _weekdayLabels.length;
       }
 
       results.add(
         _ImportedScheduleEvent(
-          title: title,
-          url: url,
-          eventTime: time,
-          dayLabel: currentDayLabel ?? _weekdayLabels[dayIndex],
-          languageLabel: language,
-          sportLabel: _detectSportFromName(title),
-          channels: List<_VideoChannel>.unmodifiable(<_VideoChannel>[
-            _VideoChannel(
-              url: url,
-              label: _channelLabel(url),
-              language: language,
-            ),
-          ]),
+          title: event.title,
+          url: event.primaryUrl ?? '',
+          eventTime: event.eventTime,
+          dayLabel: event.dayLabel ?? _weekdayLabels[dayIndex],
+          languageLabel: event.languageLabel,
+          sportLabel: event.sportLabel,
+          channels: List<_VideoChannel>.unmodifiable(event.channels),
         ),
       );
-      previousTime = time;
+      previousTime = event.eventTime;
     }
 
     return results;
