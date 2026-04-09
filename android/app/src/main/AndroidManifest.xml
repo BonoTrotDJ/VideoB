@@ -70,5 +70,9 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <package android:name="com.mxtech.videoplayer.ad" />
+        <package android:name="com.mxtech.videoplayer.pro" />
+        <package android:name="org.videolan.vlc" />
+        <package android:name="org.xbmc.kodi" />
     </queries>
 </manifest>

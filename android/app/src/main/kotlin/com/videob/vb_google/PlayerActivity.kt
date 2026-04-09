@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -41,6 +42,7 @@ class PlayerActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_player)
 
         webView = findViewById(R.id.player_webview)
@@ -48,6 +50,9 @@ class PlayerActivity : Activity() {
         statusView = findViewById(R.id.player_status)
         progressBar = findViewById(R.id.player_progress)
         loadingOverlay = findViewById(R.id.player_loading_overlay)
+        webView.keepScreenOn = true
+        playerView.keepScreenOn = true
+        loadingOverlay.keepScreenOn = true
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         dohEnabled = intent.getBooleanExtra(EXTRA_DOH_ENABLED, false)

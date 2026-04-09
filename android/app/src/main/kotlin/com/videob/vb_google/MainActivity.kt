@@ -61,6 +61,7 @@ class MainActivity : FlutterActivity() {
                 "openExternalUrl" -> {
                     val url = call.argument<String>("url")?.trim().orEmpty()
                     val referer = call.argument<String>("referer")?.trim().orEmpty()
+                    val packageName = call.argument<String>("packageName")?.trim().orEmpty()
                     if (url.isBlank()) {
                         result.error("invalid_url", "URL non valido.", null)
                         return@setMethodCallHandler
@@ -93,6 +94,9 @@ class MainActivity : FlutterActivity() {
                             val intent = Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(Uri.parse(url), guessMimeType(url))
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                if (packageName.isNotBlank()) {
+                                    setPackage(packageName)
+                                }
                                 if (headers.size() > 0) {
                                     putExtra("headers", headers)
                                 }
@@ -100,8 +104,12 @@ class MainActivity : FlutterActivity() {
                                     putExtra(Intent.EXTRA_REFERRER, Uri.parse(referer))
                                 }
                             }
-                            val launchIntent = Intent.createChooser(intent, "Apri con").apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val launchIntent = if (packageName.isNotBlank()) {
+                                intent
+                            } else {
+                                Intent.createChooser(intent, "Apri con").apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
                             }
                             startActivity(launchIntent)
                             result.success(true)
@@ -260,6 +268,10 @@ class MainActivity : FlutterActivity() {
                     result.success(DnsVpnService.isActive())
                 }
 
+                "getExternalPlayers" -> {
+                    result.success(getAvailableExternalPlayers())
+                }
+
                 "isAmazonFireTv" -> {
                     val manufacturer = Build.MANUFACTURER.orEmpty()
                     val brand = Build.BRAND.orEmpty()
@@ -289,6 +301,26 @@ class MainActivity : FlutterActivity() {
             url.contains(".mp4", ignoreCase = true) -> "video/mp4"
             else -> "video/*"
         }
+
+    private fun getAvailableExternalPlayers(): List<Map<String, String>> {
+        return EXTERNAL_PLAYER_CANDIDATES.mapNotNull { candidate ->
+            val appInfo = runCatching {
+                packageManager.getApplicationInfo(candidate.packageName, 0)
+            }.getOrNull()
+            if (appInfo == null) {
+                null
+            } else {
+                val appLabel = runCatching {
+                    packageManager.getApplicationLabel(appInfo).toString()
+                }.getOrDefault(candidate.label)
+                mapOf(
+                    "id" to candidate.id,
+                    "label" to appLabel,
+                    "packageName" to candidate.packageName,
+                )
+            }
+        }
+    }
 
     private fun handleDnsVpnToggle(enabled: Boolean, result: MethodChannel.Result) {
         if (!enabled) {
@@ -474,6 +506,18 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val REQUEST_PREPARE_DNS_VPN = 1201
+        private val EXTERNAL_PLAYER_CANDIDATES = listOf(
+            ExternalPlayerCandidate("mx", "MX Player", "com.mxtech.videoplayer.ad"),
+            ExternalPlayerCandidate("mxpro", "MX Player Pro", "com.mxtech.videoplayer.pro"),
+            ExternalPlayerCandidate("vlc", "VLC", "org.videolan.vlc"),
+            ExternalPlayerCandidate("kodi", "Kodi", "org.xbmc.kodi"),
+        )
     }
 }
+
+private data class ExternalPlayerCandidate(
+    val id: String,
+    val label: String,
+    val packageName: String,
+)
 

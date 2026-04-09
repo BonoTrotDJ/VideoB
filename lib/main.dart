@@ -770,6 +770,9 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   bool _isBusy = false;
   bool _dohEnabled = false;
   _PlayerMode _preferredPlayerMode = _PlayerMode.internal;
+  List<_ExternalPlayerChoice> _availableExternalPlayers =
+      const <_ExternalPlayerChoice>[];
+  String? _selectedExternalPlayerPackage;
   bool _isAmazonFireTv = false;
   bool _isNowMode = false;
   bool _isScanningNowMode = false;
@@ -782,10 +785,21 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   String? _status;
 
   static const String _dohKey = 'doh_enabled';
+  static const String _externalPlayerPackageKey =
+      'preferred_external_player_package_v1';
 
   Future<void> _persistPlayerMode(_PlayerMode mode) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setString(_playerModeKey, mode.name);
+  }
+
+  Future<void> _persistExternalPlayerPackage(String? packageName) async {
+    final preferences = await SharedPreferences.getInstance();
+    if (packageName == null || packageName.isEmpty) {
+      await preferences.remove(_externalPlayerPackageKey);
+      return;
+    }
+    await preferences.setString(_externalPlayerPackageKey, packageName);
   }
 
   _VideoList? get _selectedList {
@@ -824,6 +838,27 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .toList()
       ..sort();
     return languages;
+  }
+
+  _ExternalPlayerChoice? get _selectedExternalPlayerChoice {
+    final packageName = _selectedExternalPlayerPackage;
+    if (packageName == null || packageName.isEmpty) {
+      return null;
+    }
+    for (final player in _availableExternalPlayers) {
+      if (player.packageName == packageName) {
+        return player;
+      }
+    }
+    return null;
+  }
+
+  String get _selectedPlayerValue {
+    if (_preferredPlayerMode == _PlayerMode.external &&
+        _selectedExternalPlayerChoice != null) {
+      return _selectedExternalPlayerChoice!.packageName;
+    }
+    return 'internal';
   }
 
   List<_VideoEntry> get _filteredEntries {
@@ -905,11 +940,38 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         await _channel.invokeMethod<bool>('getDnsVpnEnabled') ?? false;
     final isAmazonFireTv =
         await _channel.invokeMethod<bool>('isAmazonFireTv') ?? false;
+    final externalPlayersResponse =
+        await _channel.invokeMethod<dynamic>('getExternalPlayers');
+    final availableExternalPlayers =
+        (externalPlayersResponse as List<dynamic>? ?? const <dynamic>[])
+            .whereType<Map>()
+            .map(
+              (Map<dynamic, dynamic> raw) => _ExternalPlayerChoice(
+                id: raw['id']?.toString() ?? '',
+                label: raw['label']?.toString() ?? '',
+                packageName: raw['packageName']?.toString() ?? '',
+              ),
+            )
+            .where(
+              (_ExternalPlayerChoice player) =>
+                  player.label.isNotEmpty && player.packageName.isNotEmpty,
+            )
+            .toList();
     final storedPlayerMode = preferences.getString(_playerModeKey);
+    final storedExternalPlayerPackage =
+        preferences.getString(_externalPlayerPackageKey);
     final preferredPlayerMode = _PlayerMode.values.firstWhere(
       (_PlayerMode mode) => mode.name == storedPlayerMode,
       orElse: () => _PlayerMode.internal,
     );
+    final selectedExternalPlayerPackage = availableExternalPlayers.any(
+      (_ExternalPlayerChoice player) =>
+          player.packageName == storedExternalPlayerPackage,
+    )
+        ? storedExternalPlayerPackage
+        : (availableExternalPlayers.isNotEmpty
+            ? availableExternalPlayers.first.packageName
+            : null);
     _dohEnabled = nativeDohEnabled || storedDohEnabled;
     await preferences.setBool(_dohKey, _dohEnabled);
     var rawLists = preferences.getString(_listsKey);
@@ -949,6 +1011,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     setState(() {
       _isAmazonFireTv = isAmazonFireTv;
       _preferredPlayerMode = preferredPlayerMode;
+      _availableExternalPlayers = availableExternalPlayers;
+      _selectedExternalPlayerPackage = selectedExternalPlayerPackage;
       _videoLists = parsedLists;
       _selectedListId = effectiveSelectedId;
       _isLoading = false;
@@ -1251,6 +1315,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       await _channel.invokeMethod<void>('openExternalUrl', <String, dynamic>{
         'url': externalUrl,
         'referer': referer,
+        'packageName': _selectedExternalPlayerPackage,
       });
       if (!mounted) {
         return;
@@ -1280,6 +1345,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       });
     }
   }
+
 
   Future<List<String>> _extractLinksFromUrl(String url) async {
     final response = await _channel.invokeMethod<dynamic>(
@@ -2422,7 +2488,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   children: <Widget>[
                     Text(
                       'Menu',
-                      style: theme.textTheme.headlineSmall?.copyWith(
+                      style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
@@ -2471,7 +2537,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2512,43 +2578,57 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 26),
-                    DropdownButtonFormField<_PlayerMode>(
-                      value: _preferredPlayerMode,
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: _selectedPlayerValue,
                       decoration: const InputDecoration(
                         labelText: 'Player',
                       ),
-                      items: _PlayerMode.values
-                          .map(
-                            (_PlayerMode mode) => DropdownMenuItem<_PlayerMode>(
-                              value: mode,
-                              child: Row(
-                                children: <Widget>[
-                                  Icon(
-                                    mode == _PlayerMode.internal
-                                        ? Icons.tv_rounded
-                                        : Icons.open_in_new_rounded,
-                                    size: 18,
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(mode.label),
-                                ],
-                              ),
+                      items: <DropdownMenuItem<String>>[
+                        const DropdownMenuItem<String>(
+                          value: 'internal',
+                          child: Row(
+                            children: <Widget>[
+                              Icon(Icons.tv_rounded, size: 18),
+                              SizedBox(width: 10),
+                              Text('Player interno'),
+                            ],
+                          ),
+                        ),
+                        ..._availableExternalPlayers.map(
+                          (_ExternalPlayerChoice player) =>
+                              DropdownMenuItem<String>(
+                            value: player.packageName,
+                            child: Row(
+                              children: <Widget>[
+                                const Icon(Icons.open_in_new_rounded, size: 18),
+                                const SizedBox(width: 10),
+                                Text(player.label),
+                              ],
                             ),
-                          )
-                          .toList(),
-                      onChanged: (_PlayerMode? value) {
-                        if (value == null) {
+                          ),
+                        ),
+                      ],
+                      onChanged: (String? value) async {
+                        if (value == null || !mounted) {
+                          return;
+                        }
+                        if (value == 'internal') {
+                          setState(() {
+                            _preferredPlayerMode = _PlayerMode.internal;
+                          });
+                          await _persistPlayerMode(_PlayerMode.internal);
                           return;
                         }
                         setState(() {
-                          _preferredPlayerMode = value;
+                          _preferredPlayerMode = _PlayerMode.external;
+                          _selectedExternalPlayerPackage = value;
                         });
-                        _persistPlayerMode(value);
-                        Navigator.of(context).pop();
+                        await _persistPlayerMode(_PlayerMode.external);
+                        await _persistExternalPlayerPackage(value);
                       },
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: FilledButton.tonalIcon(
@@ -4182,6 +4262,18 @@ class _CreateListDialogResult {
   final String name;
   final _VideoListSourceType sourceType;
   final String sourceUrl;
+}
+
+class _ExternalPlayerChoice {
+  const _ExternalPlayerChoice({
+    required this.id,
+    required this.label,
+    required this.packageName,
+  });
+
+  final String id;
+  final String label;
+  final String packageName;
 }
 
 enum _PlayerMode { internal, external }
