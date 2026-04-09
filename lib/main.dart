@@ -1106,50 +1106,76 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return;
     }
 
-    await showDialog<void>(
+    final selectedChannel = await showDialog<_VideoChannel>(
       context: context,
-      builder: (BuildContext ctx) => AlertDialog(
-        title: Text(entry.name),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(
-              'Scegli la lingua:',
-              style: const TextStyle(color: Colors.white70, fontSize: 13),
+      builder: (BuildContext ctx) {
+        final maxDialogHeight = MediaQuery.of(ctx).size.height * 0.62;
+        return AlertDialog(
+          title: Text(entry.name),
+          content: SizedBox(
+            width: 520,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxDialogHeight),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text(
+                    'Scegli la lingua:',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: Scrollbar(
+                      thumbVisibility: true,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: channels.length,
+                        itemBuilder: (BuildContext context, int i) {
+                          final ch = channels[i];
+                          return ListTile(
+                            autofocus: i == 0,
+                            leading: const Icon(Icons.play_circle_outline_rounded),
+                            title: Text(ch.language.isNotEmpty ? ch.language : ch.label),
+                            subtitle: ch.language.isNotEmpty && ch.label.isNotEmpty
+                                ? Text(ch.label, style: const TextStyle(fontSize: 11))
+                                : null,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            onTap: () => Navigator.of(ctx).pop(ch),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            ...List<Widget>.generate(channels.length, (int i) {
-              final ch = channels[i];
-              return ListTile(
-                autofocus: i == 0,
-                leading: const Icon(Icons.play_circle_outline_rounded),
-                title: Text(ch.language.isNotEmpty ? ch.language : ch.label),
-                subtitle: ch.language.isNotEmpty && ch.label.isNotEmpty
-                    ? Text(ch.label, style: const TextStyle(fontSize: 11))
-                    : null,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  _openWithPreferredPlayer(
-                    ch.url,
-                    entry.id,
-                    entry.name,
-                  );
-                },
-              );
-            }),
-          ],
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Annulla'),
           ),
-        ],
-      ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Annulla'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || selectedChannel == null) {
+      return;
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted) {
+      return;
+    }
+
+    await _openWithPreferredPlayer(
+      selectedChannel.url,
+      entry.id,
+      entry.name,
     );
   }
 
@@ -1190,8 +1216,17 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (!mounted) {
         return;
       }
+      _showToastStatus('errore connessione video');
       setState(() {
-        _status = error.message ?? 'Errore durante l\'apertura del player.';
+        _status = error.message ?? 'errore connessione video';
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showToastStatus('errore connessione video');
+      setState(() {
+        _status = 'errore connessione video';
       });
     }
   }
@@ -1231,9 +1266,17 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (!mounted) {
         return;
       }
+      _showToastStatus('errore connessione video');
       setState(() {
-        _status =
-            error.message ?? 'Errore durante l\'apertura del player esterno.';
+        _status = error.message ?? 'errore connessione video';
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showToastStatus('errore connessione video');
+      setState(() {
+        _status = 'errore connessione video';
       });
     }
   }
@@ -2378,7 +2421,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'Le Tue Liste',
+                      'Menu',
                       style: theme.textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -2428,6 +2471,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         Navigator.of(context).pop();
                       },
                     ),
+                    const SizedBox(height: 18),
                     DropdownButtonFormField<String>(
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2468,7 +2512,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 26),
                     DropdownButtonFormField<_PlayerMode>(
                       value: _preferredPlayerMode,
                       decoration: const InputDecoration(

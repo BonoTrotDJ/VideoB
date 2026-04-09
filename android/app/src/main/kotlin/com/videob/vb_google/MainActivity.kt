@@ -100,7 +100,10 @@ class MainActivity : FlutterActivity() {
                                     putExtra(Intent.EXTRA_REFERRER, Uri.parse(referer))
                                 }
                             }
-                            startActivity(Intent.createChooser(intent, "Apri con"))
+                            val launchIntent = Intent.createChooser(intent, "Apri con").apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(launchIntent)
                             result.success(true)
                         } catch (error: Exception) {
                             result.error(
