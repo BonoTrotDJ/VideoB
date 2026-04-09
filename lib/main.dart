@@ -756,6 +756,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   final ScrollController _mainScrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final FocusNode _menuFocusNode = FocusNode();
+  final FocusNode _sportFilterFocusNode = FocusNode();
+  final FocusNode _languageFilterFocusNode = FocusNode();
   final FocusNode _refreshImportedListFocusNode = FocusNode();
 
   List<_VideoList> _videoLists = const <_VideoList>[];
@@ -902,6 +904,16 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         .toList();
   }
 
+  void _focusDrawerPrimaryField() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final target = _isNowMode ? _languageFilterFocusNode : _sportFilterFocusNode;
+      target.requestFocus();
+    });
+  }
+
   List<_VideoEntry> get _uniqueNowModeEntries {
     final uniqueEntries = <_VideoEntry>[];
     final seenUrls = <String>{};
@@ -953,6 +965,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     _entryUrlController.dispose();
     _mainScrollController.dispose();
     _menuFocusNode.dispose();
+    _sportFilterFocusNode.dispose();
+    _languageFilterFocusNode.dispose();
     _refreshImportedListFocusNode.dispose();
     super.dispose();
   }
@@ -2489,6 +2503,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       },
       child: Scaffold(
       key: _scaffoldKey,
+      onDrawerChanged: (bool isOpened) {
+        if (isOpened) {
+          _focusDrawerPrimaryField();
+        }
+      },
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -2519,6 +2538,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
+                      focusNode: _sportFilterFocusNode,
                       value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
@@ -2564,6 +2584,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
+                      focusNode: _languageFilterFocusNode,
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
                               ? _selectedLanguageFilter
