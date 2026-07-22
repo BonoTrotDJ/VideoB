@@ -11,5 +11,6 @@
 ## Build
 
 - versione applicazione: `1.0.5`;
+- codice Downloader per installazione diretta: `9794842`;
 - build Android: `6`;
 - tag release consigliato: `v1.0.5`.
