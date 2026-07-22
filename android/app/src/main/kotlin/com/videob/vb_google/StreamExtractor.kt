@@ -2,10 +2,13 @@ package com.videob.vb_google
 
 import java.io.BufferedInputStream
 import java.net.URI
+import java.nio.charset.StandardCharsets
 import java.util.LinkedHashSet
 import java.util.regex.Pattern
+import android.util.Base64
 import android.util.Log
 import okhttp3.Request
+import org.json.JSONObject
 
 object StreamExtractor {
     private const val tag = "VideoBResolve"
@@ -23,6 +26,11 @@ object StreamExtractor {
         )
     private val urlPattern =
         Pattern.compile("""https?:\/\/[^"'\\\s<>()]+""", Pattern.CASE_INSENSITIVE)
+    private val encodedConfigPattern =
+        Pattern.compile(
+            """window\._econfig\s*=\s*["']([^"']+)["']""",
+            Pattern.CASE_INSENSITIVE,
+        )
 
     fun extractLinks(sourceUrl: String, useDoh: Boolean = false): List<String> {
         val html = download(sourceUrl, useDoh, sourceUrl)
@@ -119,6 +127,14 @@ object StreamExtractor {
             )
         }
 
+        extractEncodedStreamUrl(embedHtml)?.let { streamUrl ->
+            Log.d(tag, "resolve encoded stream found on embed stream=$streamUrl referer=$iframeUrl")
+            return ResolvedStream(
+                streamUrl = streamUrl,
+                refererUrl = iframeUrl,
+            )
+        }
+
         Log.d(tag, "resolve failed source=$sourceUrl iframe=$iframeUrl")
         return null
     }
@@ -132,6 +148,70 @@ object StreamExtractor {
             }
         }
         return null
+    }
+
+    /**
+     * The current embedded player stores its stream URL in window._econfig.
+     * This mirrors the decoder shipped by the provider in assets/stream.js.
+     */
+    private fun extractEncodedStreamUrl(html: String): String? {
+        val matcher = encodedConfigPattern.matcher(html)
+        if (!matcher.find()) {
+            return null
+        }
+
+        return runCatching {
+            val encoded = matcher.group(1) ?: return@runCatching null
+            val packed = String(
+                Base64.decode(encoded, Base64.DEFAULT),
+                StandardCharsets.ISO_8859_1,
+            )
+            if (packed.isEmpty()) {
+                return@runCatching null
+            }
+
+            val chunkLength = (packed.length + 3) / 4
+            val order = intArrayOf(2, 0, 3, 1)
+            val parts = arrayOfNulls<String>(4)
+            var offset = 0
+
+            repeat(4) { index ->
+                val end = minOf(offset + chunkLength, packed.length)
+                if (offset >= end) {
+                    return@runCatching null
+                }
+                val chunk = packed.substring(offset, end)
+                offset = end
+                if (chunk.length < 4) {
+                    return@runCatching null
+                }
+
+                val cleaned = chunk.substring(0, 3) + chunk.substring(4)
+                parts[order[index]] = String(
+                    Base64.decode(cleaned, Base64.DEFAULT),
+                    StandardCharsets.ISO_8859_1,
+                )
+            }
+
+            if (parts.any { it == null }) {
+                return@runCatching null
+            }
+            val joined = parts.filterNotNull().joinToString("")
+            val jsonText = String(
+                Base64.decode(joined, Base64.DEFAULT),
+                StandardCharsets.UTF_8,
+            )
+            val config = JSONObject(jsonText)
+
+            listOf("stream_url", "stream_url_nop2p", "url_nop2p")
+                .asSequence()
+                .map { key -> config.optString(key).trim() }
+                .firstOrNull { candidate ->
+                    candidate.startsWith("http://") || candidate.startsWith("https://")
+                }
+        }.onFailure { error ->
+            Log.w(tag, "encoded stream decode failed", error)
+        }.getOrNull()
     }
 
     private fun extractFirstIframeUrl(html: String, sourceUrl: String): String? {

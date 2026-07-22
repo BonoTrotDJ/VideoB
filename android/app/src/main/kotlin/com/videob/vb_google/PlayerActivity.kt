@@ -122,7 +122,7 @@ class PlayerActivity : Activity() {
                 ) {
                     return super.shouldInterceptRequest(view, request)
                 }
-                val webRequest = request ?: return super.shouldInterceptRequest(view, request)
+                val webRequest = request ?: return null
 
                 return runCatching {
                     val requestBuilder = Request.Builder().url(target)
