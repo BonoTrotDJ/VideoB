@@ -3404,10 +3404,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         );
         final cardSize =
             (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
-        final tileAspectRatio =
-            list.sourceType == _VideoListSourceType.imported && _isNowMode
-                ? 16 / 7
-                : 1.0;
+        final useFixedAspectRatio =
+            list.sourceType == _VideoListSourceType.imported && _isNowMode;
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 14),
@@ -3419,11 +3417,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                   (_VideoEntry entry) => SizedBox(
                     width: cardSize,
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        AspectRatio(
-                          aspectRatio: tileAspectRatio,
-                          child: _buildEntryTile(list, entry),
-                        ),
+                        useFixedAspectRatio
+                            ? AspectRatio(
+                                aspectRatio: 16 / 7,
+                                child: _buildEntryTile(list, entry),
+                              )
+                            : _buildEntryTile(list, entry),
                         if (list.sourceType == _VideoListSourceType.manual)
                           Focus(
                             child: Builder(
@@ -3647,7 +3648,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                         ),
                       ),
                     ],
-                    const Spacer(),
+                    const SizedBox(height: 14),
                     if (channelSummary != null)
                       Container(
                         width: double.infinity,

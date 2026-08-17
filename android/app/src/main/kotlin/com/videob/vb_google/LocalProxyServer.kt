@@ -22,10 +22,10 @@ import okhttp3.Request
 object LocalProxyServer {
     private const val tag = "VideoBProxy"
     private const val userAgent =
-        "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    private const val referer = "https://sportsonline.si/"
-    private const val origin = "https://sportsonline.si"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    private const val referer = "https://sportsonline.st/"
+    private const val origin = "https://sportsonline.st"
 
     @Volatile
     private var serverSocket: ServerSocket? = null

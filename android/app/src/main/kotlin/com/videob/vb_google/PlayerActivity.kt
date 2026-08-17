@@ -87,8 +87,8 @@ class PlayerActivity : Activity() {
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = false
             userAgentString =
-                "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -100,7 +100,12 @@ class PlayerActivity : Activity() {
                 resultMsg: android.os.Message?,
             ): Boolean = false
 
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean = true
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                consoleMessage?.let {
+                    Log.d(logTag, "console[${it.messageLevel()}] ${it.message()} (${it.sourceId()}:${it.lineNumber()})")
+                }
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -205,6 +210,11 @@ class PlayerActivity : Activity() {
                 }
             }
 
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                view.evaluateJavascript(disguiseAsChromeJs, null)
+            }
+
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 loadingOverlay.visibility = View.GONE
@@ -213,6 +223,33 @@ class PlayerActivity : Activity() {
             }
         }
     }
+
+    /**
+     * Alcuni provider bloccano la riproduzione se rilevano che la pagina gira
+     * dentro una WebView anziche un vero browser desktop (outerWidth/Height a 0,
+     * navigator.webdriver, plugin list vuota). Questi segnali vengono mascherati
+     * per farla apparire come una normale finestra Chrome.
+     */
+    private val disguiseAsChromeJs = """
+        (function() {
+          try {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
+            Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight });
+            if (!window.chrome) {
+              window.chrome = { runtime: {} };
+            }
+            if (!navigator.plugins || navigator.plugins.length === 0) {
+              Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+              });
+            }
+            if (!navigator.languages || navigator.languages.length === 0) {
+              Object.defineProperty(navigator, 'languages', { get: () => ['it-IT', 'it', 'en-US', 'en'] });
+            }
+          } catch (e) {}
+        })();
+    """.trimIndent()
 
     private fun loadSource(url: String) {
         releasePlayer()
@@ -229,11 +266,15 @@ class PlayerActivity : Activity() {
             return
         }
 
+        val originHost = runCatching {
+            val uri = android.net.Uri.parse(url)
+            "${uri.scheme}://${uri.host}"
+        }.getOrDefault("https://sportsonline.st")
         webView.loadUrl(
             url,
             mapOf(
-                "Referer" to "https://sportsonline.si/",
-                "Origin" to "https://sportsonline.si",
+                "Referer" to "$originHost/",
+                "Origin" to originHost,
             ),
         )
     }
