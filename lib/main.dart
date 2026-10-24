@@ -1516,7 +1516,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     }
 
     final resolvedSourceUrl = response.request?.url.toString() ?? uri.toString();
-    final decodedBody = _decodeRemoteText(response.bodyBytes);
+    final decodedBody = _stripHtmlMarkup(_decodeRemoteText(response.bodyBytes));
     final lastUpdate = _parseLastUpdateFromText(decodedBody);
     final events = _parsePlainTextSchedule(decodedBody);
     return (resolvedSourceUrl, <_VideoEntry>[
@@ -1546,6 +1546,22 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return latinText;
     }
     return utf8Text;
+  }
+
+  String _stripHtmlMarkup(String raw) {
+    if (!raw.contains('<')) {
+      return raw;
+    }
+    return raw
+        .replaceAll(RegExp(r'<\s*(br|/p|/div|/tr|/li)\b[^>]*>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'<[^>]*>'), '')
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&#160;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'");
   }
 
   DateTime? _parseLastUpdateFromText(String raw) {
