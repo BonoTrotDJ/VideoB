@@ -21,9 +21,9 @@ class VideoBApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const background = Color(0xFF07111F);
-    const surface = Color(0xFF11213A);
-    const accent = Color(0xFFF4B942);
+    const background = Color(0xFF0B0F17);
+    const surface = Color(0xFF131A28);
+    const accent = Color(0xFF3DDC97);
 
     return MaterialApp(
       title: 'VideoB',
@@ -34,7 +34,7 @@ class VideoBApp extends StatelessWidget {
         scaffoldBackgroundColor: background,
         colorScheme: const ColorScheme.dark(
           primary: accent,
-          secondary: Color(0xFF65D3FF),
+          secondary: Color(0xFF4FC3F7),
           surface: surface,
         ),
         cardTheme: const CardThemeData(
@@ -725,7 +725,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.7+8';
+  static const _appVersion = '1.0.8+9';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -767,7 +767,8 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   String? _editingEntryId;
   String? _activeEntryId;
   String? _activeEntryName;
-  String? _focusedEntryId;
+  final ValueNotifier<String?> _focusedEntryNotifier =
+      ValueNotifier<String?>(null);
   bool _isLoading = true;
   bool _isBusy = false;
   bool _dohEnabled = false;
@@ -2561,6 +2562,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 16),
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       focusNode: _sportFilterFocusNode,
                       value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
@@ -2607,6 +2609,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       focusNode: _languageFilterFocusNode,
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2649,6 +2652,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
+                      isExpanded: true,
                       value: _selectedPlayerValue,
                       decoration: const InputDecoration(
                         labelText: 'Player',
@@ -3444,7 +3448,10 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 .map(
                   (_VideoEntry entry) => SizedBox(
                     width: cardSize,
-                    child: Column(
+                    child: _FocusRebuilder(
+                      notifier: _focusedEntryNotifier,
+                      entryId: entry.id,
+                      builder: (BuildContext context) => Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         useFixedAspectRatio
@@ -3502,6 +3509,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                           ),
                       ],
                     ),
+                    ),
                   ),
                 )
                 .toList(),
@@ -3516,40 +3524,36 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       return _buildNowModeEntryTile(entry);
     }
 
-    final sportBg = _sportBackground(entry.sportLabel);
-    final tilePadding = _isAmazonFireTv ? 13.0 : 18.0;
-    final scheduleFontSize = _isAmazonFireTv ? 18.0 : 24.0;
-    final titleFontSize = _isAmazonFireTv ? 15.0 : 18.0;
-    final metaFontSize = _isAmazonFireTv ? 11.0 : 13.0;
-    final backgroundIconSize = _isAmazonFireTv ? 108.0 : 140.0;
-    final isFocused = _focusedEntryId == entry.id;
-    final borderColor = isFocused
-        ? Colors.white
-        : Colors.white.withValues(alpha: 0.10);
+    final accent = _sportAccent(entry.sportLabel);
+    final compact = _isAmazonFireTv;
+    final tilePadding = compact ? 12.0 : 16.0;
+    final timeFontSize = compact ? 22.0 : 30.0;
+    final titleFontSize = compact ? 14.0 : 17.0;
+    final metaFontSize = compact ? 11.0 : 13.0;
+    final isFocused = _focusedEntryNotifier.value == entry.id;
+    final borderColor =
+        isFocused ? Colors.white : Colors.white.withValues(alpha: 0.08);
     final channels =
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
-    final scheduleLabel = _formatEntrySchedule(entry);
-    final hasSchedule = scheduleLabel.isNotEmpty;
-    final backgroundSportIcon =
-        entry.sportLabel != null ? _sportIcon(entry.sportLabel!) : null;
+    final eventTime = entry.eventTime?.trim() ?? '';
+    final dayLabel = entry.dayLabel?.trim() ?? '';
+    final isLive = _isEntryLive(entry);
     final channelSummary = channels.length == 1
         ? channels.first.label.trim().isNotEmpty
             ? channels.first.label.trim()
             : 'Canale'
         : channels.length > 1
-        ? '${channels.length} canali'
-        : (entry.url.isNotEmpty ? 'Streaming disponibile' : null);
+            ? '${channels.length} canali'
+            : (entry.url.isNotEmpty ? 'Streaming' : null);
+    final language = entry.language?.trim() ?? '';
 
     return Focus(
       onFocusChange: (bool hasFocus) {
-        if (!mounted) return;
-        setState(() {
-          if (hasFocus) {
-            _focusedEntryId = entry.id;
-          } else if (_focusedEntryId == entry.id) {
-            _focusedEntryId = null;
-          }
-        });
+        if (hasFocus) {
+          _focusedEntryNotifier.value = entry.id;
+        } else if (_focusedEntryNotifier.value == entry.id) {
+          _focusedEntryNotifier.value = null;
+        }
       },
       onKeyEvent: (FocusNode node, KeyEvent event) {
         if (event is KeyDownEvent &&
@@ -3564,152 +3568,231 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       child: GestureDetector(
         onTap: () => _openEntryWithChannelPicker(entry),
         child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            decoration: BoxDecoration(
-              color: sportBg,
-              borderRadius: BorderRadius.circular(22),
-              border: Border.all(
-                color: borderColor,
-                width: isFocused ? 2 : 1,
-              ),
-            ),
-            padding: EdgeInsets.all(tilePadding),
-            child: Stack(
+          duration: const Duration(milliseconds: 100),
+          decoration: BoxDecoration(
+            color: isFocused ? const Color(0xFF1B2538) : const Color(0xFF131A28),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: borderColor, width: isFocused ? 2 : 1),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                if (backgroundSportIcon != null)
-                  Positioned(
-                    right: -6,
-                    bottom: -10,
-                    child: IgnorePointer(
-                      child: Icon(
-                        backgroundSportIcon,
-                        size: backgroundIconSize,
-                        color: Colors.white.withValues(alpha: 0.10),
-                      ),
-                    ),
-                  ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Row(
+                Container(width: 5, color: accent),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.all(tilePadding),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              if (hasSchedule)
-                                Text(
-                                  scheduleLabel,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: <Widget>[
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    eventTime.isNotEmpty
+                                        ? eventTime
+                                        : _formatEntrySchedule(entry),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: timeFontSize,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: -0.8,
+                                      color: Colors.white,
+                                      height: 1.0,
+                                    ),
+                                  ),
+                                  if (dayLabel.isNotEmpty &&
+                                      eventTime.isNotEmpty) ...<Widget>[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      dayLabel.toUpperCase(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: metaFontSize - 1,
+                                        letterSpacing: 1.1,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white54,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            if (isLive)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE5484D),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  'LIVE',
                                   style: TextStyle(
-                                    fontSize: scheduleFontSize,
+                                    fontSize: metaFontSize - 2,
                                     fontWeight: FontWeight.w800,
-                                    letterSpacing: -0.8,
+                                    letterSpacing: 0.8,
                                     color: Colors.white,
                                   ),
                                 ),
-                              if (entry.sportLabel != null) ...<Widget>[
-                                const SizedBox(height: 10),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 5),
+                              ),
+                            if (entry.sportLabel != null)
+                              Tooltip(
+                                message: entry.sportLabel!,
+                                child: Container(
+                                  padding: const EdgeInsets.all(7),
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.10),
-                                    borderRadius: BorderRadius.circular(999),
+                                    color: accent.withValues(alpha: 0.18),
+                                    shape: BoxShape.circle,
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      Icon(
-                                        _sportIcon(entry.sportLabel!),
-                                        size: 16,
-                                        color: Colors.white,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: Text(
-                                          entry.sportLabel!,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: TextStyle(
-                                            fontSize: metaFontSize,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
+                                  child: Icon(
+                                    _sportIcon(entry.sportLabel!),
+                                    size: compact ? 16 : 20,
+                                    color: accent,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        SizedBox(height: compact ? 10 : 14),
+                        if (entry.sportLabel == 'Calcio')
+                          _FootballEventCrests(title: entry.name)
+                        else
+                          Text(
+                            entry.name,
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: titleFontSize,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              height: 1.25,
+                            ),
+                          ),
+                        if (language.isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 8),
+                          Text(
+                            language,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: metaFontSize,
+                              color: Colors.white.withValues(alpha: 0.6),
+                            ),
+                          ),
+                        ],
+                        if (channelSummary != null) ...<Widget>[
+                          SizedBox(height: compact ? 10 : 14),
+                          Container(
+                            width: double.infinity,
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: compact ? 8 : 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: accent.withValues(alpha: isFocused ? 0.9 : 0.16),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: <Widget>[
+                                Icon(
+                                  Icons.play_arrow_rounded,
+                                  size: 18,
+                                  color: isFocused
+                                      ? const Color(0xFF0B0F17)
+                                      : accent,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    channelSummary,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: metaFontSize,
+                                      fontWeight: FontWeight.w700,
+                                      color: isFocused
+                                          ? const Color(0xFF0B0F17)
+                                          : Colors.white,
+                                    ),
                                   ),
                                 ),
                               ],
-                            ],
+                            ),
                           ),
-                        ),
+                        ],
                       ],
                     ),
-                    const SizedBox(height: 14),
-                    if (entry.sportLabel == 'Calcio') ...<Widget>[
-                      _FootballEventCrests(title: entry.name),
-                      const SizedBox(height: 14),
-                    ],
-                    if (entry.sportLabel != 'Calcio')
-                      Text(
-                        entry.name,
-                        maxLines: 4,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: titleFontSize,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          height: 1.25,
-                        ),
-                      ),
-                    if (entry.language != null && entry.language!.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Lingue: ${entry.language}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: metaFontSize,
-                          color: Colors.white.withValues(alpha: 0.65),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    if (channelSummary != null)
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Text(
-                          channelSummary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: metaFontSize,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                  ],
+                  ),
                 ),
               ],
             ),
           ),
         ),
+      ),
     );
   }
 
+  Color _sportAccent(String? sportLabel) {
+    switch (sportLabel) {
+      case 'Calcio':
+        return const Color(0xFF3DDC97);
+      case 'Basket':
+        return const Color(0xFFFF9F43);
+      case 'Tennis':
+        return const Color(0xFFD4E157);
+      case 'Golf':
+        return const Color(0xFF66BB6A);
+      case 'Football Americano':
+        return const Color(0xFFBCAAA4);
+      case 'Hockey':
+        return const Color(0xFF4FC3F7);
+      case 'Baseball':
+        return const Color(0xFFEF9A9A);
+      case 'Rugby':
+        return const Color(0xFFFFCA28);
+      case 'Volley':
+        return const Color(0xFFBA68C8);
+      case 'Pallamano':
+        return const Color(0xFFFFB74D);
+      case 'Motori':
+        return const Color(0xFFFF5252);
+      case 'Boxe':
+      case 'MMA':
+        return const Color(0xFFF06292);
+      default:
+        return const Color(0xFF90A4AE);
+    }
+  }
+
+  bool _isEntryLive(_VideoEntry entry) {
+    final time = entry.eventTime?.trim() ?? '';
+    final day = entry.dayLabel?.trim() ?? '';
+    final parts = time.split(':');
+    if (parts.length != 2 || day != _weekdayLabels[DateTime.now().weekday % 7]) {
+      return false;
+    }
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) {
+      return false;
+    }
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day, hour, minute);
+    return !now.isBefore(start) && now.isBefore(start.add(const Duration(hours: 2)));
+  }
+
   Widget _buildNowModeEntryTile(_VideoEntry entry) {
-    final isFocused = _focusedEntryId == entry.id;
+    final isFocused = _focusedEntryNotifier.value == entry.id;
     final languageLabel = entry.language?.trim() ?? '';
     final backgroundLabel = _nowModeBackgroundLabel(entry);
     final borderColor = isFocused
@@ -3718,14 +3801,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
 
     return Focus(
       onFocusChange: (bool hasFocus) {
-        if (!mounted) return;
-        setState(() {
-          if (hasFocus) {
-            _focusedEntryId = entry.id;
-          } else if (_focusedEntryId == entry.id) {
-            _focusedEntryId = null;
-          }
-        });
+        if (hasFocus) {
+          _focusedEntryNotifier.value = entry.id;
+        } else if (_focusedEntryNotifier.value == entry.id) {
+          _focusedEntryNotifier.value = null;
+        }
       },
       onKeyEvent: (FocusNode node, KeyEvent event) {
         if (event is KeyDownEvent &&
@@ -3740,7 +3820,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       child: GestureDetector(
         onTap: () => _openEntryWithChannelPicker(entry),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
+          duration: const Duration(milliseconds: 100),
           decoration: BoxDecoration(
             color: const Color(0xFF154C79),
             borderRadius: BorderRadius.circular(22),
@@ -4451,7 +4531,7 @@ class _CreateListPageState extends State<_CreateListPage> {
         title: const Text('Nuova Lista'),
       ),
       body: AnimatedPadding(
-        duration: const Duration(milliseconds: 180),
+        duration: const Duration(milliseconds: 100),
         curve: Curves.easeOut,
         padding: EdgeInsets.only(bottom: viewInsets.bottom),
         child: SafeArea(
@@ -4765,4 +4845,50 @@ class _SectionCard extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// Ricostruisce il figlio solo quando cambia lo stato di focus di [entryId],
+/// evitando di ridisegnare tutte le schede a ogni movimento del telecomando.
+class _FocusRebuilder extends StatefulWidget {
+  const _FocusRebuilder({
+    required this.notifier,
+    required this.entryId,
+    required this.builder,
+  });
+
+  final ValueNotifier<String?> notifier;
+  final String entryId;
+  final WidgetBuilder builder;
+
+  @override
+  State<_FocusRebuilder> createState() => _FocusRebuilderState();
+}
+
+class _FocusRebuilderState extends State<_FocusRebuilder> {
+  late bool _focused = widget.notifier.value == widget.entryId;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.notifier.addListener(_onChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.notifier.removeListener(_onChanged);
+    super.dispose();
+  }
+
+  void _onChanged() {
+    final focused = widget.notifier.value == widget.entryId;
+    if (focused != _focused && mounted) {
+      setState(() => _focused = focused);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: widget.builder(context),
+      );
 }
