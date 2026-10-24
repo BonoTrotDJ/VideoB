@@ -725,7 +725,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.5+6';
+  static const _appVersion = '1.0.7+8';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -2538,7 +2538,14 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       drawer: Drawer(
         width: drawerWidth,
         child: SafeArea(
-          child: Column(
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints:
+                      BoxConstraints(minHeight: constraints.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Padding(
@@ -2810,6 +2817,11 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 ),
               ),
             ],
+          ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),
