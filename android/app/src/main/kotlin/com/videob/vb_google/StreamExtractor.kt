@@ -253,7 +253,12 @@ object StreamExtractor {
 
         NetworkClientFactory.get(useDoh).newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                error("Errore download sorgente: ${response.code}")
+                val reason = if (response.code == 403) {
+                    "Il server video ha rifiutato la richiesta (403)"
+                } else {
+                    "Errore download sorgente: ${response.code}"
+                }
+                error(reason)
             }
             val body = response.body ?: error("Risposta vuota dalla sorgente.")
             return body.byteStream().use { input ->

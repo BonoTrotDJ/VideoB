@@ -1319,7 +1319,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (!mounted) {
         return;
       }
-      _showToastStatus('errore connessione video');
+      _showToastStatus(error.message ?? 'errore connessione video');
       setState(() {
         _status = error.message ?? 'errore connessione video';
       });
@@ -1370,7 +1370,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
       if (!mounted) {
         return;
       }
-      _showToastStatus('errore connessione video');
+      _showToastStatus(error.message ?? 'errore connessione video');
       setState(() {
         _status = error.message ?? 'errore connessione video';
       });
