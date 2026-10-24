@@ -22,8 +22,8 @@ import okhttp3.Request
 object LocalProxyServer {
     private const val tag = "VideoBProxy"
     private const val userAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
     private const val referer = "https://sportsonline.st/"
     private const val origin = "https://sportsonline.st"
 
@@ -221,7 +221,7 @@ object LocalProxyServer {
             }
 
             bodyStream.use { stream ->
-                if (!headOnly && isPlaylist(effectiveRequest.targetUrl, contentType)) {
+                if (!headOnly && statusCode in 200..299 && isPlaylist(effectiveRequest.targetUrl, contentType)) {
                     val playlistText = BufferedInputStream(stream).reader(StandardCharsets.UTF_8).readText()
                     Log.d(tag, "Playlist fetched target=${effectiveRequest.targetUrl} size=${playlistText.length}")
                     val rewritten = rewritePlaylist(effectiveRequest, playlistText)
