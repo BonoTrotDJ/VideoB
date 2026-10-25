@@ -718,14 +718,22 @@ class VideoBHomePage extends StatefulWidget {
   State<VideoBHomePage> createState() => _VideoBHomePageState();
 }
 
-class _VideoBHomePageState extends State<VideoBHomePage> {
+class _VideoBHomePageState extends State<VideoBHomePage>
+    with WidgetsBindingObserver {
   static const _channel = MethodChannel('videob/channel');
+  static const _autoRefreshInterval = Duration(minutes: 5);
+  static const _liveTickInterval = Duration(seconds: 30);
+  static const _savedLinkRetention = Duration(days: 30);
+  final ValueNotifier<int> _liveTick = ValueNotifier<int>(0);
+  Timer? _liveTimer;
+  Timer? _autoRefreshTimer;
+  DateTime _lastAutoRefresh = DateTime.now();
   static const _listsKey = 'video_lists_v2';
   static const _selectedListKey = 'selected_video_list_v2';
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.8+9';
+  static const _appVersion = '1.0.9+10';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -957,11 +965,31 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _liveTimer = Timer.periodic(_liveTickInterval, (_) => _liveTick.value++);
+    _autoRefreshTimer = Timer.periodic(
+      _autoRefreshInterval,
+      (_) => _autoRefreshImportedList(),
+    );
     _loadLists();
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _liveTick.value++;
+      if (DateTime.now().difference(_lastAutoRefresh) > const Duration(minutes: 1)) {
+        _autoRefreshImportedList();
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _liveTimer?.cancel();
+    _autoRefreshTimer?.cancel();
+    _liveTick.dispose();
     _entryNameController.dispose();
     _entryUrlController.dispose();
     _mainScrollController.dispose();
@@ -2148,6 +2176,110 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
     await _persistLists();
   }
 
+  List<_SavedLink> _mergeSavedLinks(
+    List<_SavedLink> existing,
+    List<_VideoEntry> entries,
+  ) {
+    final now = DateTime.now();
+    final byUrl = <String, _SavedLink>{
+      for (final link in existing) link.url: link,
+    };
+    for (final entry in entries) {
+      final channels = entry.channels.isNotEmpty
+          ? entry.channels
+          : entry.url.isNotEmpty
+              ? <_VideoChannel>[
+                  _VideoChannel(
+                    url: entry.url,
+                    label: 'Canale',
+                    language: entry.language ?? '',
+                  ),
+                ]
+              : <_VideoChannel>[];
+      for (final channel in channels) {
+        if (channel.url.isEmpty) continue;
+        byUrl[channel.url] = _SavedLink(
+          url: channel.url,
+          label: channel.label,
+          language: channel.language,
+          lastEvent: entry.name,
+          lastSeen: now,
+        );
+      }
+    }
+    final cutoff = now.subtract(_savedLinkRetention);
+    return byUrl.values
+        .where((_SavedLink link) => link.lastSeen.isAfter(cutoff))
+        .toList()
+      ..sort((_SavedLink a, _SavedLink b) => a.label.compareTo(b.label));
+  }
+
+  /// Aggiorna in silenzio la lista importata selezionata, senza interrompere
+  /// l'utente e senza toccare la modalita Link.
+  Future<void> _autoRefreshImportedList() async {
+    _lastAutoRefresh = DateTime.now();
+    final list = _selectedList;
+    if (list == null ||
+        list.sourceType != _VideoListSourceType.imported ||
+        _isBusy ||
+        _isNowMode ||
+        _isScanningNowMode) {
+      return;
+    }
+    final sourceUrl = list.sourceUrl?.trim() ?? '';
+    if (sourceUrl.isEmpty) return;
+
+    try {
+      final (resolvedSourceUrl, loaded, parsedLastUpdate) =
+          await _loadEntriesFromSource(sourceUrl);
+      if (!mounted || loaded.isEmpty) return;
+
+      final current = _videoLists.cast<_VideoList?>().firstWhere(
+            (_VideoList? item) => item?.id == list.id,
+            orElse: () => null,
+          );
+      if (current == null || _isBusy || _isNowMode) return;
+
+      String keyOf(_VideoEntry e) =>
+          '${e.dayLabel}|${e.eventTime}|${e.name}|${e.channels.map((c) => c.url).join(',')}|${e.url}';
+      final oldIds = <String, String>{
+        for (final e in current.entries) keyOf(e): e.id,
+      };
+      final entries = <_VideoEntry>[
+        for (final e in loaded)
+          _VideoEntry(
+            id: oldIds[keyOf(e)] ?? e.id,
+            name: e.name,
+            url: e.url,
+            eventTime: e.eventTime,
+            dayLabel: e.dayLabel,
+            language: e.language,
+            sportLabel: e.sportLabel,
+            channels: e.channels,
+          ),
+      ];
+      final unchanged = jsonEncode(entries.map((e) => e.toJson()).toList()) ==
+          jsonEncode(current.entries.map((e) => e.toJson()).toList());
+      if (unchanged) return;
+
+      final updated = current.copyWith(
+        entries: entries,
+        sourceUrl: resolvedSourceUrl,
+        updatedAt: parsedLastUpdate ?? DateTime.now(),
+        savedLinks: _mergeSavedLinks(current.savedLinks, entries),
+      );
+      setState(() {
+        _videoLists = _videoLists
+            .map((_VideoList item) => item.id == updated.id ? updated : item)
+            .toList();
+      });
+      await _persistLists();
+      unawaited(_prefetchCrestsInBackground(entries));
+    } catch (_) {
+      // Aggiornamento automatico: gli errori di rete vengono ignorati.
+    }
+  }
+
   Future<void> _refreshImportedList(
     String listId, {
     bool keepFocusOnRefresh = false,
@@ -2194,6 +2326,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
         entries: importedEntries,
         sourceUrl: resolvedSourceUrl,
         updatedAt: parsedLastUpdate ?? DateTime.now(),
+        savedLinks: _mergeSavedLinks(list.savedLinks, importedEntries),
       );
 
       if (!mounted) {
@@ -3068,6 +3201,13 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     _activateNowMode(selectedList);
                   },
           ),
+        if (selectedList.sourceType == _VideoListSourceType.imported &&
+            selectedList.savedLinks.isNotEmpty)
+          ActionChip(
+            avatar: const Icon(Icons.bookmark_rounded, size: 18),
+            label: Text('Link salvati (${selectedList.savedLinks.length})'),
+            onPressed: () => _showSavedLinks(selectedList),
+          ),
         if (selectedList.sourceType == _VideoListSourceType.imported)
           ActionChip(
             focusNode: _refreshImportedListFocusNode,
@@ -3083,6 +3223,68 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                 _isBusy ? null : () => _refreshImportedList(selectedList.id),
           ),
       ],
+    );
+  }
+
+  Future<void> _showSavedLinks(_VideoList list) async {
+    final links = list.savedLinks;
+    final selected = await showDialog<_SavedLink>(
+      context: context,
+      builder: (BuildContext ctx) {
+        final maxHeight = MediaQuery.of(ctx).size.height * 0.62;
+        return AlertDialog(
+          title: const Text('Link salvati'),
+          content: SizedBox(
+            width: 520,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxHeight),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: links.length,
+                itemBuilder: (BuildContext context, int i) {
+                  final link = links[i];
+                  final title = link.label.isNotEmpty ? link.label : 'Canale';
+                  final details = <String>[
+                    if (link.language.isNotEmpty) link.language,
+                    if (link.lastEvent.isNotEmpty) link.lastEvent,
+                  ].join(' - ');
+                  return ListTile(
+                    autofocus: i == 0,
+                    leading: const Icon(Icons.play_circle_outline_rounded),
+                    title: Text(title),
+                    subtitle: details.isEmpty
+                        ? null
+                        : Text(
+                            details,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    onTap: () => Navigator.of(ctx).pop(link),
+                  );
+                },
+              ),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Chiudi'),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted || selected == null) return;
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted) return;
+    await _openWithPreferredPlayer(
+      selected.url,
+      null,
+      selected.label.isNotEmpty ? selected.label : 'Canale',
     );
   }
 
@@ -3450,6 +3652,7 @@ class _VideoBHomePageState extends State<VideoBHomePage> {
                     width: cardSize,
                     child: _FocusRebuilder(
                       notifier: _focusedEntryNotifier,
+                      refresh: _liveTick,
                       entryId: entry.id,
                       builder: (BuildContext context) => Column(
                       mainAxisSize: MainAxisSize.min,
@@ -4658,6 +4861,7 @@ class _VideoList {
     required this.entries,
     this.sourceUrl,
     this.updatedAt,
+    this.savedLinks = const <_SavedLink>[],
   });
 
   final String id;
@@ -4666,6 +4870,7 @@ class _VideoList {
   final String? sourceUrl;
   final List<_VideoEntry> entries;
   final DateTime? updatedAt;
+  final List<_SavedLink> savedLinks;
 
   _VideoList copyWith({
     String? id,
@@ -4674,6 +4879,7 @@ class _VideoList {
     String? sourceUrl,
     List<_VideoEntry>? entries,
     DateTime? updatedAt,
+    List<_SavedLink>? savedLinks,
   }) {
     return _VideoList(
       id: id ?? this.id,
@@ -4682,6 +4888,7 @@ class _VideoList {
       sourceUrl: sourceUrl ?? this.sourceUrl,
       entries: entries ?? this.entries,
       updatedAt: updatedAt ?? this.updatedAt,
+      savedLinks: savedLinks ?? this.savedLinks,
     );
   }
 
@@ -4692,6 +4899,7 @@ class _VideoList {
       'sourceType': sourceType.name,
       'sourceUrl': sourceUrl,
       'updatedAt': updatedAt?.toIso8601String(),
+      'savedLinks': savedLinks.map((_SavedLink link) => link.toJson()).toList(),
       'entries': entries.map((_VideoEntry entry) => entry.toJson()).toList(),
     };
   }
@@ -4715,6 +4923,48 @@ class _VideoList {
           .whereType<Map<String, dynamic>>()
           .map(_VideoEntry.fromJson)
           .toList(),
+      savedLinks:
+          (json['savedLinks'] as List<dynamic>? ?? const <dynamic>[])
+              .whereType<Map<String, dynamic>>()
+              .map(_SavedLink.fromJson)
+              .toList(),
+    );
+  }
+}
+
+/// Link di un canale visto in passato, conservato anche quando non compare
+/// piu negli eventi correnti.
+class _SavedLink {
+  const _SavedLink({
+    required this.url,
+    required this.label,
+    required this.language,
+    required this.lastEvent,
+    required this.lastSeen,
+  });
+
+  final String url;
+  final String label;
+  final String language;
+  final String lastEvent;
+  final DateTime lastSeen;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'url': url,
+        'label': label,
+        'language': language,
+        'lastEvent': lastEvent,
+        'lastSeen': lastSeen.toIso8601String(),
+      };
+
+  factory _SavedLink.fromJson(Map<String, dynamic> json) {
+    return _SavedLink(
+      url: json['url'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      language: json['language'] as String? ?? '',
+      lastEvent: json['lastEvent'] as String? ?? '',
+      lastSeen: DateTime.tryParse(json['lastSeen'] as String? ?? '') ??
+          DateTime.now(),
     );
   }
 }
@@ -4855,8 +5105,10 @@ class _FocusRebuilder extends StatefulWidget {
     required this.notifier,
     required this.entryId,
     required this.builder,
+    this.refresh,
   });
 
+  final Listenable? refresh;
   final ValueNotifier<String?> notifier;
   final String entryId;
   final WidgetBuilder builder;
@@ -4872,11 +5124,17 @@ class _FocusRebuilderState extends State<_FocusRebuilder> {
   void initState() {
     super.initState();
     widget.notifier.addListener(_onChanged);
+    widget.refresh?.addListener(_onRefresh);
+  }
+
+  void _onRefresh() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     widget.notifier.removeListener(_onChanged);
+    widget.refresh?.removeListener(_onRefresh);
     super.dispose();
   }
 
