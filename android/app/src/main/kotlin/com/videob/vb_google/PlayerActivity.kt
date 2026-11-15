@@ -55,6 +55,7 @@ class PlayerActivity : Activity() {
         loadingOverlay.keepScreenOn = true
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
+        val referer = intent.getStringExtra(EXTRA_REFERER).orEmpty()
         dohEnabled = intent.getBooleanExtra(EXTRA_DOH_ENABLED, false)
         if (url.isBlank()) {
             statusView.text = "URL non valido."
@@ -62,7 +63,7 @@ class PlayerActivity : Activity() {
         }
 
         configureWebView()
-        loadSource(url)
+        loadSource(url, referer)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -251,7 +252,7 @@ class PlayerActivity : Activity() {
         })();
     """.trimIndent()
 
-    private fun loadSource(url: String) {
+    private fun loadSource(url: String, referer: String = "") {
         releasePlayer()
         webView.visibility = View.VISIBLE
         playerView.visibility = View.GONE
@@ -266,14 +267,15 @@ class PlayerActivity : Activity() {
             return
         }
 
+        val refererUrl = referer.ifBlank { url }
         val originHost = runCatching {
-            val uri = android.net.Uri.parse(url)
+            val uri = android.net.Uri.parse(refererUrl)
             "${uri.scheme}://${uri.host}"
         }.getOrDefault("https://sportsonline.st")
         webView.loadUrl(
             url,
             mapOf(
-                "Referer" to "$originHost/",
+                "Referer" to refererUrl,
                 "Origin" to originHost,
             ),
         )
@@ -782,6 +784,7 @@ class PlayerActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "extra_url"
+        const val EXTRA_REFERER = "extra_referer"
         const val EXTRA_DOH_ENABLED = "extra_doh_enabled"
     }
 }

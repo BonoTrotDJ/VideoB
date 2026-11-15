@@ -51,6 +51,7 @@ class MainActivity : FlutterActivity() {
 
                     val intent = Intent(this, PlayerActivity::class.java).apply {
                         putExtra(PlayerActivity.EXTRA_URL, url)
+                        putExtra(PlayerActivity.EXTRA_REFERER, call.argument<String>("referer")?.trim().orEmpty())
                         putExtra(PlayerActivity.EXTRA_DOH_ENABLED, dohEnabled)
                     }
                     Log.d(logTag, "openUrl url=$url doh=$dohEnabled")
@@ -204,13 +205,17 @@ class MainActivity : FlutterActivity() {
                                     val uri = URI(referer)
                                     "${uri.scheme}://${uri.host}"
                                 }.getOrElse { referer }
-                                val playbackUrl = LocalProxyServer.proxyUrl(
-                                    targetUrl = resolved.streamUrl,
-                                    refererHeader = referer,
-                                    originHeader = origin,
-                                    sourceUrl = url,
-                                    dohEnabled = dohEnabled,
-                                )
+                                val playbackUrl = if (resolved.isEmbed) {
+                                    resolved.streamUrl
+                                } else {
+                                    LocalProxyServer.proxyUrl(
+                                        targetUrl = resolved.streamUrl,
+                                        refererHeader = referer,
+                                        originHeader = origin,
+                                        sourceUrl = url,
+                                        dohEnabled = dohEnabled,
+                                    )
+                                }
                                 Log.d(
                                     logTag,
                                     "resolveStream success source=$url resolved=${resolved.streamUrl} referer=$referer playback=$playbackUrl",

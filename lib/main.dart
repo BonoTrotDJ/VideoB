@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.9+10';
+  static const _appVersion = '1.0.10+11';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -1192,9 +1192,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
 
   Future<Map<String, String>> _resolvePlayback(String url) async {
     final rawUrl = url.trim();
+    final useDoh = _networkDohForUrl(rawUrl);
     final resolved = await _channel.invokeMethod<dynamic>(
       'resolveStream',
-      <String, dynamic>{'url': rawUrl, 'dohEnabled': false},
+      <String, dynamic>{'url': rawUrl, 'dohEnabled': useDoh},
     );
     return <String, String>{
       'playbackUrl':
@@ -1328,9 +1329,17 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       final resolved = await _resolvePlayback(rawUrl);
       final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
       final resolvedUrl = resolved['resolvedUrl'] ?? rawUrl;
+      final referer = resolved['referer'] ?? rawUrl;
+      // L'iframe protetto deve usare la rete/WebView del telefono: il proxy
+      // OkHttp con DoH non conserva i cookie necessari a Turnstile.
+      final playerDoh = _isProtectedEmbed(playbackUrl) ||
+              _isProtectedEmbed(resolvedUrl)
+          ? false
+          : _networkDohForUrl(playbackUrl);
       await _channel.invokeMethod<void>('openUrl', <String, dynamic>{
         'url': playbackUrl,
-        'dohEnabled': false,
+        'referer': referer,
+        'dohEnabled': playerDoh,
       });
       if (!mounted) {
         return;
@@ -1416,9 +1425,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
 
 
   Future<List<String>> _extractLinksFromUrl(String url) async {
+    final useDoh = _networkDohForUrl(url);
     final response = await _channel.invokeMethod<dynamic>(
       'extractLinks',
-      <String, dynamic>{'url': url, 'dohEnabled': false},
+      <String, dynamic>{'url': url, 'dohEnabled': useDoh},
     );
 
     return (response as List<dynamic>? ?? <dynamic>[])
@@ -1435,6 +1445,22 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     'Accept-Language': 'en-US,en;q=0.9,it;q=0.8',
     'Cache-Control': 'no-cache',
   };
+
+  bool _networkDohForUrl(String url) {
+    final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+    return _dohEnabled ||
+        host == 'sportsonline.st' ||
+        host.endsWith('.sportsonline.st') ||
+        host == 'sportsoonline.click' ||
+        host.endsWith('.sportsoonline.click');
+  }
+
+  bool _isProtectedEmbed(String url) {
+    final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+    return host.endsWith('.dynbush.net') ||
+        host == 'dynbush.net' ||
+        Uri.tryParse(url.trim())?.path.startsWith('/e/') == true;
+  }
 
   http.Client _createHttpClient() => http.Client();
 
@@ -1576,9 +1602,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   Future<(String, List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(
     Uri uri,
   ) async {
+    final useDoh = _networkDohForUrl(uri.toString());
     final rawBody = await _channel.invokeMethod<String>('downloadText', <String, dynamic>{
       'url': uri.toString(),
-      'dohEnabled': _dohEnabled,
+      'dohEnabled': useDoh,
     });
     if (rawBody == null || rawBody.isEmpty) {
       throw PlatformException(
@@ -1591,7 +1618,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     final decodedBody = _stripHtmlMarkup(rawBody);
     final lastUpdate = _parseLastUpdateFromText(decodedBody);
     final events = _parsePlainTextSchedule(decodedBody);
-    return (resolvedSourceUrl, <_VideoEntry>[
+    final entries = <_VideoEntry>[
       for (var i = 0; i < events.length; i++)
         _VideoEntry(
           id: '${DateTime.now().microsecondsSinceEpoch}-$i',
@@ -1603,7 +1630,50 @@ class _VideoBHomePageState extends State<VideoBHomePage>
           sportLabel: events[i].sportLabel,
           channels: events[i].channels,
         ),
-    ], lastUpdate);
+    ];
+
+    // Il palinsesto principale può pubblicare altre liste .txt (per esempio
+    // 247.txt) che contengono canali 24/7 nel formato "nome - url.php".
+    // Le seguiamo e le aggiungiamo alla stessa lista eventi.
+    final secondaryUrls = RegExp(
+      r'https?://[^\s<>|]+\.txt(?:\?[^\s<>|]+)?',
+      caseSensitive: false,
+    ).allMatches(decodedBody).map((match) => match.group(0)!.replaceAll('//247.txt', '/247.txt')).toSet();
+    for (final secondaryUrl in secondaryUrls) {
+      if (secondaryUrl == resolvedSourceUrl) continue;
+      try {
+        final secondaryBody = await _channel.invokeMethod<String>('downloadText', <String, dynamic>{
+          'url': secondaryUrl,
+          'dohEnabled': _networkDohForUrl(secondaryUrl),
+        });
+        if (secondaryBody == null) continue;
+        final channelMatches = RegExp(
+          r'^\s*(.+?)\s+-\s+(https?://\S+\.php(?:\?\S+)?)\s*$',
+          caseSensitive: false,
+        );
+        for (final line in secondaryBody.split(RegExp(r'\r?\n'))) {
+          final match = channelMatches.firstMatch(line);
+          if (match == null) continue;
+          final name = (match.group(1) ?? '').trim();
+          final channelUrl = (match.group(2) ?? '').trim();
+          if (name.isEmpty || channelUrl.isEmpty ||
+              entries.any((entry) => entry.url == channelUrl)) {
+            continue;
+          }
+          entries.add(_VideoEntry(
+            id: '${DateTime.now().microsecondsSinceEpoch}-${entries.length}',
+            name: name,
+            url: channelUrl,
+            language: _extractLanguageFromUrl(channelUrl),
+            sportLabel: _detectSportFromName(name),
+            dayLabel: '24/7',
+          ));
+        }
+      } catch (_) {
+        // Una lista secondaria non deve impedire il caricamento degli eventi.
+      }
+    }
+    return (resolvedSourceUrl, entries, lastUpdate);
   }
 
   String _decodeRemoteText(List<int> bytes) {
@@ -2248,7 +2318,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   ) {
     final now = DateTime.now();
     final byUrl = <String, _SavedLink>{
-      for (final link in existing) link.url: link,
+      for (final link in existing) _savedLinkKey(link.url): link,
     };
     for (final entry in entries) {
       final channels = entry.channels.isNotEmpty
@@ -2264,8 +2334,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
               : <_VideoChannel>[];
       for (final channel in channels) {
         if (channel.url.isEmpty) continue;
-        byUrl[channel.url] = _SavedLink(
-          url: channel.url,
+        final url = channel.url.trim();
+        if (url.isEmpty) continue;
+        byUrl[_savedLinkKey(url)] = _SavedLink(
+          url: url,
           label: channel.label,
           language: channel.language,
           lastEvent: entry.name,
@@ -4921,6 +4993,24 @@ class _CreateListPageState extends State<_CreateListPage> {
   }
 }
 
+String _savedLinkKey(String url) => url.trim();
+
+List<_SavedLink> _dedupeSavedLinks(Iterable<_SavedLink> links) {
+  final byUrl = <String, _SavedLink>{};
+  for (final link in links) {
+    final url = link.url.trim();
+    if (url.isEmpty) continue;
+    byUrl[_savedLinkKey(url)] = url == link.url ? link : _SavedLink(
+      url: url,
+      label: link.label,
+      language: link.language,
+      lastEvent: link.lastEvent,
+      lastSeen: link.lastSeen,
+    );
+  }
+  return byUrl.values.toList();
+}
+
 class _VideoList {
   const _VideoList({
     required this.id,
@@ -4991,11 +5081,11 @@ class _VideoList {
           .whereType<Map<String, dynamic>>()
           .map(_VideoEntry.fromJson)
           .toList(),
-      savedLinks:
-          (json['savedLinks'] as List<dynamic>? ?? const <dynamic>[])
-              .whereType<Map<String, dynamic>>()
-              .map(_SavedLink.fromJson)
-              .toList(),
+      savedLinks: _dedupeSavedLinks(
+        (json['savedLinks'] as List<dynamic>? ?? const <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(_SavedLink.fromJson),
+      ),
     );
   }
 }

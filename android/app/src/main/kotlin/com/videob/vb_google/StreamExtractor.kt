@@ -138,8 +138,12 @@ object StreamExtractor {
             )
         }
 
-        Log.d(tag, "resolve failed source=$sourceUrl iframe=$iframeUrl")
-        return null
+        Log.d(tag, "resolve embed fallback source=$sourceUrl iframe=$iframeUrl")
+        return ResolvedStream(
+            streamUrl = iframeUrl,
+            refererUrl = sourceUrl,
+            isEmbed = true,
+        )
     }
 
     private fun extractFirstStreamUrl(html: String): String? {
@@ -260,4 +264,5 @@ object StreamExtractor {
 data class ResolvedStream(
     val streamUrl: String,
     val refererUrl: String,
+    val isEmbed: Boolean = false,
 )
