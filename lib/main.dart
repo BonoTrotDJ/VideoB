@@ -1427,6 +1427,15 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         .toList();
   }
 
+  static const Map<String, String> _sourceRequestHeaders = <String, String>{
+    'User-Agent':
+        'Mozilla/5.0 (Linux; Android 13; SM-S721B) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36',
+    'Accept': 'text/plain,text/html,application/xhtml+xml,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9,it;q=0.8',
+    'Cache-Control': 'no-cache',
+  };
+
   http.Client _createHttpClient() => http.Client();
 
   Future<void> _setDohEnabled(bool value) async {
@@ -1508,44 +1517,78 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       throw const FormatException('URL sorgente non valido.');
     }
 
-    final looksLikePlainText = uri.path.toLowerCase().endsWith('.txt') ||
-        (uri.host.toLowerCase() == 'sportsonline.st' &&
-            (uri.path.isEmpty || uri.path == '/'));
-    if (looksLikePlainText) {
+    // Sorgente testuale dichiarata esplicitamente (es. .../prog.txt).
+    if (uri.path.toLowerCase().endsWith('.txt')) {
       return _loadEntriesFromPlainTextSource(uri);
     }
 
-    final links =
-        (await _extractLinksFromUrl(sourceUrl)).where(_isPhpUrl).toList();
-    return (sourceUrl, <_VideoEntry>[
-      for (var i = 0; i < links.length; i++)
-        _VideoEntry(
-          id: '${DateTime.now().microsecondsSinceEpoch}-$i',
-          name: _buildImportedEntryName(links[i], i),
-          url: links[i],
-          language: _extractLanguageFromUrl(links[i]),
-          sportLabel:
-              _detectSportFromName(_buildImportedEntryName(links[i], i)),
-        ),
-    ], null);
+    // sportsonline.st pubblica il palinsesto nella lista testuale; la pagina
+    // principale può essere una challenge HTML e non contiene gli eventi.
+    if (uri.host.toLowerCase() == 'sportsonline.st') {
+      return _loadEntriesFromPlainTextSource(_buildProgTextFallbackUri(uri));
+    }
+
+    // 1) ricerca dei link nella pagina indicata (es. https://sportsonline.st).
+    List<String> links;
+    try {
+      links = (await _extractLinksFromUrl(sourceUrl)).where(_isPhpUrl).toList();
+    } catch (_) {
+      links = <String>[];
+    }
+
+    if (links.isNotEmpty) {
+      return (sourceUrl, <_VideoEntry>[
+        for (var i = 0; i < links.length; i++)
+          _VideoEntry(
+            id: '${DateTime.now().microsecondsSinceEpoch}-$i',
+            name: _buildImportedEntryName(links[i], i),
+            url: links[i],
+            language: _extractLanguageFromUrl(links[i]),
+            sportLabel:
+                _detectSportFromName(_buildImportedEntryName(links[i], i)),
+          ),
+      ], null);
+    }
+
+    // 2) nessun link trovato: si prova il palinsesto testuale <url>/prog.txt.
+    final fallbackUri = _buildProgTextFallbackUri(uri);
+    final (_, fallbackEntries, fallbackLastUpdate) =
+        await _loadEntriesFromPlainTextSource(fallbackUri);
+    return (sourceUrl, fallbackEntries, fallbackLastUpdate);
+  }
+
+  /// Costruisce l'URL di fallback `<sorgente>/prog.txt` a partire dall'URL
+  /// della pagina da cui non è stato possibile estrarre alcun link.
+  Uri _buildProgTextFallbackUri(Uri source) {
+    final path = source.path;
+    if (path.toLowerCase().endsWith('/prog.txt')) {
+      return source;
+    }
+    final basePath = path.endsWith('/') ? path : '$path/';
+    final normalizedBase = basePath.startsWith('/') ? basePath : '/$basePath';
+    return source.replace(
+      path: '${normalizedBase}prog.txt',
+      query: '',
+      fragment: '',
+    );
   }
 
   Future<(String, List<_VideoEntry>, DateTime?)> _loadEntriesFromPlainTextSource(
     Uri uri,
   ) async {
-    final client = _createHttpClient();
-    final response = await client.get(uri);
-    client.close();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
+    final rawBody = await _channel.invokeMethod<String>('downloadText', <String, dynamic>{
+      'url': uri.toString(),
+      'dohEnabled': _dohEnabled,
+    });
+    if (rawBody == null || rawBody.isEmpty) {
       throw PlatformException(
         code: 'plain_text_fetch_failed',
-        message:
-            'Impossibile leggere la lista testuale (${response.statusCode}).',
+        message: 'Risposta vuota dalla lista eventi.',
       );
     }
 
-    final resolvedSourceUrl = response.request?.url.toString() ?? uri.toString();
-    final decodedBody = _stripHtmlMarkup(_decodeRemoteText(response.bodyBytes));
+    final resolvedSourceUrl = uri.toString();
+    final decodedBody = _stripHtmlMarkup(rawBody);
     final lastUpdate = _parseLastUpdateFromText(decodedBody);
     final events = _parsePlainTextSchedule(decodedBody);
     return (resolvedSourceUrl, <_VideoEntry>[
@@ -2077,7 +2120,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     final existingList = _videoLists.cast<_VideoList?>().firstWhere(
           (_VideoList? item) =>
               item?.sourceType == _VideoListSourceType.imported &&
-              item?.sourceUrl == _sportListSourceUrl,
+              _isSportListSource(item?.sourceUrl),
           orElse: () => null,
         );
 
@@ -2105,6 +2148,29 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       sourceType: _VideoListSourceType.imported,
       sourceUrl: _sportListSourceUrl,
     );
+  }
+
+  /// Riconosce una lista "Sport" anche se la sorgente salvata è già
+  /// `<base>/prog.txt` invece dell'URL della pagina principale.
+  bool _isSportListSource(String? sourceUrl) {
+    final url = sourceUrl?.trim() ?? '';
+    if (url.isEmpty) {
+      return false;
+    }
+    if (url == _sportListSourceUrl) {
+      return true;
+    }
+    final source = Uri.tryParse(url);
+    final expected = Uri.tryParse(_sportListSourceUrl);
+    if (source == null || expected == null) {
+      return false;
+    }
+    final hostMatches = source.host.toLowerCase() == expected.host.toLowerCase();
+    if (!hostMatches) {
+      return false;
+    }
+    final path = source.path.toLowerCase();
+    return path.isEmpty || path == '/' || path == '/prog.txt';
   }
 
   Future<void> _confirmDeleteList(_VideoList list) async {
@@ -2358,12 +2424,14 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       if (!mounted) {
         return;
       }
+      final detail = error.message?.trim();
+      final message = detail == null || detail.isEmpty
+          ? 'errore connessione, provare ad attivare dns 1.1.1.1'
+          : 'Errore sorgente: $detail';
       setState(() {
-        _status = showConnectionErrorOnly
-            ? 'errore connessione, provare ad attivare dns 1.1.1.1'
-            : 'errore connessione, provare ad attivare dns 1.1.1.1';
+        _status = message;
       });
-      _showToastStatus('errore connessione, provare ad attivare dns 1.1.1.1');
+      _showToastStatus(message);
       _requestRefreshImportedListFocus();
     } on Exception {
       if (!mounted) {

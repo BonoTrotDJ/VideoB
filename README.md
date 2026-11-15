@@ -55,6 +55,10 @@ Video BonoTrot supporta:
 - liste testuali con link video `.php`
 - pagine da cui estrarre link candidati
 
+Se da una pagina non viene estratto alcun link, l'app prova automaticamente il
+palinsesto testuale `<url-sorgente>/prog.txt` (valido anche per
+`https://sportsonline.st`, la cui home carica `prog.txt` via JavaScript).
+
 Per le sorgenti testuali, l'app prova a riconoscere automaticamente:
 
 - giorno dell'evento

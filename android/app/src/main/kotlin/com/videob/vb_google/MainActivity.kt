@@ -157,6 +157,29 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "downloadText" -> {
+                    val url = call.argument<String>("url")?.trim().orEmpty()
+                    val dohEnabled = call.argument<Boolean>("dohEnabled") == true
+                    if (url.isBlank()) {
+                        result.error("invalid_url", "URL non valido.", null)
+                        return@setMethodCallHandler
+                    }
+                    executor.execute {
+                        try {
+                            val text = StreamExtractor.downloadText(url, dohEnabled)
+                            runOnUiThread { result.success(text) }
+                        } catch (error: Exception) {
+                            runOnUiThread {
+                                result.error(
+                                    "download_failed",
+                                    error.message ?: "Download sorgente fallito.",
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 "resolveStream" -> {
                     val url = call.argument<String>("url")?.trim().orEmpty()
                     val dohEnabled = call.argument<Boolean>("dohEnabled") == true

@@ -49,6 +49,9 @@ object StreamExtractor {
             .take(12)
     }
 
+    fun downloadText(sourceUrl: String, useDoh: Boolean = false): String =
+        download(sourceUrl, useDoh, sourceUrl)
+
     private fun collectMatches(
         pattern: Pattern,
         html: String,
