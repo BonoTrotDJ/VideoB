@@ -5,9 +5,9 @@ Video BonoTrot e un lettore video per Android TV / Google TV che apre stream da 
 ## Download
 
 - Ultima release: `https://github.com/BonoTrotDJ/VideoB/releases/latest`
-- Release `v1.0.9`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.9`
-- APK `v1.0.9`: `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.9/VideoB-v1.0.9.apk`
-- codice Downloader per installazione diretta: `3074623`
+- Release `v1.0.10`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.10`
+- APK `v1.0.10`: `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.10/VideoB-v1.0.10.apk`
+- codice Downloader per installazione diretta: `3273582`
 
 L'app permette di:
 
@@ -28,6 +28,7 @@ L'app permette di:
 - badge `LIVE` aggiornato ogni 30 secondi
 - aggiornamento automatico della lista importata ogni 5 minuti e alla riapertura dell'app
 - `Link salvati`: i link dei canali già visti restano raggiungibili per 30 giorni, anche se non sono più negli eventi
+- segue anche le liste secondarie `.txt` pubblicate dalla sorgente, come `247.txt`
 
 ## Uso
 
@@ -59,6 +60,10 @@ Se da una pagina non viene estratto alcun link, l'app prova automaticamente il
 palinsesto testuale `<url-sorgente>/prog.txt` (valido anche per
 `https://sportsonline.st`, la cui home carica `prog.txt` via JavaScript).
 
+Il palinsesto può contenere ulteriori liste testuali `.txt`: Video BonoTrot le
+scarica e importa automaticamente i canali `.php` trovati, come quelli di
+`https://sportsoonline.click/247.txt`.
+
 Per le sorgenti testuali, l'app prova a riconoscere automaticamente:
 
 - giorno dell'evento
@@ -79,4 +84,4 @@ flutter run
 
 ## Release APK
 
-Quando pubblichi un tag Git come `v1.0.9`, GitHub Actions builda automaticamente la release Android e allega un APK alla GitHub Release corrispondente.
+Quando pubblichi un tag Git come `v1.0.10`, GitHub Actions builda automaticamente la release Android e allega un APK alla GitHub Release corrispondente.
