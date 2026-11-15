@@ -2,6 +2,7 @@ package com.videob.vb_google
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.view.KeyEvent
 import android.os.Bundle
@@ -20,6 +21,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Button
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -37,8 +39,13 @@ class PlayerActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var loadingOverlay: View
+    private lateinit var browserButton: Button
     private var exoPlayer: ExoPlayer? = null
     private var dohEnabled: Boolean = false
+    private var sourceUrl: String = ""
+    private var sourceReferer: String = ""
+    private var webViewRetryCount: Int = 0
+    private var embedBlocked: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,6 +57,15 @@ class PlayerActivity : Activity() {
         statusView = findViewById(R.id.player_status)
         progressBar = findViewById(R.id.player_progress)
         loadingOverlay = findViewById(R.id.player_loading_overlay)
+        browserButton = findViewById(R.id.player_browser_button)
+        browserButton.setOnClickListener {
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(sourceUrl)))
+            }.onFailure { error ->
+                Log.w(logTag, "unable to open source in browser", error)
+                statusView.text = "Nessun browser disponibile per aprire il canale."
+            }
+        }
         webView.keepScreenOn = true
         playerView.keepScreenOn = true
         loadingOverlay.keepScreenOn = true
@@ -75,6 +91,9 @@ class PlayerActivity : Activity() {
         webView.isFocusable = true
         webView.isFocusableInTouchMode = true
 
+        val mobileChromeUserAgent = WebSettings.getDefaultUserAgent(this)
+            .replace("; wv", "")
+            .replace("Version/4.0 ", "")
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -87,9 +106,7 @@ class PlayerActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             setSupportMultipleWindows(true)
             javaScriptCanOpenWindowsAutomatically = false
-            userAgentString =
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            userAgentString = mobileChromeUserAgent
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -114,6 +131,12 @@ class PlayerActivity : Activity() {
                 view: WebView?,
                 request: WebResourceRequest?,
             ): WebResourceResponse? {
+                request?.let {
+                    Log.d(
+                        logTag,
+                        "web request frame=${it.isForMainFrame} method=${it.method} url=${diagnosticUrl(it.url.toString())}",
+                    )
+                }
                 if (!dohEnabled) {
                     return super.shouldInterceptRequest(view, request)
                 }
@@ -140,6 +163,9 @@ class PlayerActivity : Activity() {
                     if (webRequest.requestHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                         requestBuilder.header("User-Agent", webView.settings.userAgentString)
                     }
+                    CookieManager.getInstance().getCookie(target)?.let { cookie ->
+                        requestBuilder.header("Cookie", cookie)
+                    }
                     requestBuilder.header("Accept-Encoding", "identity")
 
                     val response = NetworkClientFactory.get(true)
@@ -156,6 +182,9 @@ class PlayerActivity : Activity() {
                     val headers = response.headers.toMultimap()
                         .mapValues { (_, values) -> values.joinToString(", ") }
                         .toMutableMap()
+                    response.headers("Set-Cookie").forEach { cookie ->
+                        CookieManager.getInstance().setCookie(target, cookie)
+                    }
                     headers.remove("content-encoding")
                     val stream = object : FilterInputStream(body.byteStream()) {
                         override fun close() {
@@ -180,6 +209,10 @@ class PlayerActivity : Activity() {
             ): Boolean {
                 // Blocca navigazione verso nuovi URL (link esterni, reindirizzamenti pub)
                 val reqUrl = request?.url?.toString() ?: return false
+                // I player sono spesso caricati in iframe cross-domain; consenti
+                // la navigazione dei frame, continuando a bloccare popup e link
+                // esterni aperti dalla pagina principale.
+                if (request?.isForMainFrame == false) return false
                 val current = view?.url ?: return false
                 // Permetti solo lo stesso host o URL sorgente
                 return try {
@@ -195,8 +228,14 @@ class PlayerActivity : Activity() {
                 error: WebResourceError?,
             ) {
                 super.onReceivedError(view, request, error)
+                if (request != null) {
+                    Log.w(
+                        logTag,
+                        "web load error frame=${request.isForMainFrame} url=${diagnosticUrl(request.url.toString())} code=${error?.errorCode} description=${error?.description}",
+                    )
+                }
                 if (request?.isForMainFrame == true) {
-                    showConnectionError()
+                    retryWebViewOnce()
                 }
             }
 
@@ -206,24 +245,54 @@ class PlayerActivity : Activity() {
                 errorResponse: WebResourceResponse?,
             ) {
                 super.onReceivedHttpError(view, request, errorResponse)
+                if (request != null && errorResponse != null && errorResponse.statusCode >= 400) {
+                    Log.w(
+                        logTag,
+                        "web HTTP error frame=${request.isForMainFrame} url=${diagnosticUrl(request.url.toString())} code=${errorResponse.statusCode} mime=${errorResponse.mimeType} reason=${errorResponse.reasonPhrase}",
+                    )
+                }
                 if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
-                    showConnectionError()
+                    retryWebViewOnce()
+                }
+                val failedHost = request?.url?.host.orEmpty()
+                if (request?.isForMainFrame == false &&
+                    errorResponse?.statusCode == 403 &&
+                    failedHost.endsWith(".dynbush.net")) {
+                    showBrowserFallback()
                 }
             }
 
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
+                Log.d(logTag, "page started url=${diagnosticUrl(url)}")
                 view.evaluateJavascript(disguiseAsChromeJs, null)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
-                loadingOverlay.visibility = View.GONE
+                Log.d(logTag, "page finished url=$url title=${view.title}")
                 stripOverlays(view)
                 injectPlayerControls(view)
+                view.evaluateJavascript(
+                    "(function(){return {title:document.title,text:(document.body&&document.body.innerText||'').slice(0,500),videos:document.querySelectorAll('video').length,iframes:document.querySelectorAll('iframe').length}})()",
+                ) { result ->
+                    Log.d(logTag, "page state url=$url state=$result")
+                    val title = view.title.orEmpty()
+                    if (title.equals("Not allowed", ignoreCase = true) ||
+                        result.contains("Not allowed") || result.contains("domain protected")) {
+                        showConnectionError("Il canale ha rifiutato l'apertura dell'embed.")
+                    } else if (!embedBlocked) {
+                        loadingOverlay.visibility = View.GONE
+                    }
+                }
             }
         }
     }
+
+    private fun diagnosticUrl(rawUrl: String): String = runCatching {
+        val uri = android.net.Uri.parse(rawUrl)
+        uri.buildUpon().clearQuery().fragment(null).build().toString()
+    }.getOrDefault("<url non valida>")
 
     /**
      * Alcuni provider bloccano la riproduzione se rilevano che la pagina gira
@@ -253,6 +322,11 @@ class PlayerActivity : Activity() {
     """.trimIndent()
 
     private fun loadSource(url: String, referer: String = "") {
+        sourceUrl = url
+        sourceReferer = referer
+        webViewRetryCount = 0
+        embedBlocked = false
+        browserButton.visibility = View.GONE
         releasePlayer()
         webView.visibility = View.VISIBLE
         playerView.visibility = View.GONE
@@ -268,33 +342,61 @@ class PlayerActivity : Activity() {
         }
 
         val refererUrl = referer.ifBlank { url }
-        val originHost = runCatching {
-            val uri = android.net.Uri.parse(refererUrl)
-            "${uri.scheme}://${uri.host}"
-        }.getOrDefault("https://sportsonline.st")
         webView.loadUrl(
             url,
-            mapOf(
-                "Referer" to refererUrl,
-                "Origin" to originHost,
-            ),
+            mapOf("Referer" to refererUrl),
         )
     }
 
+    private fun retryWebViewOnce() {
+        if (webViewRetryCount >= 1 || sourceUrl.isBlank()) {
+            showConnectionError()
+            return
+        }
+        webViewRetryCount++
+        statusView.text = "Riprovo il collegamento..."
+        loadingOverlay.visibility = View.VISIBLE
+        webView.postDelayed({
+            if (!isFinishing && !isDestroyed) {
+                val refererUrl = sourceReferer.ifBlank { sourceUrl }
+                webView.loadUrl(
+                    sourceUrl,
+                    mapOf("Referer" to refererUrl),
+                )
+            }
+        }, 1200L)
+    }
+
     private fun showConnectionError() {
+        showConnectionError("Errore Connessione")
+    }
+
+    private fun showConnectionError(message: String) {
         releasePlayer()
         webView.stopLoading()
         webView.loadDataWithBaseURL(
             null,
-            "<html><body style='background:#000'></body></html>",
+            "<html><body style='background:#000;color:#fff;font-family:sans-serif;padding:24px;font-size:20px'>${message}</body></html>",
             "text/html",
             "utf-8",
             null,
         )
         progressBar.visibility = View.GONE
         statusView.visibility = View.VISIBLE
-        statusView.textSize = 22f
-        statusView.text = "Errore Connessione"
+        statusView.textSize = 18f
+        statusView.text = message
+        loadingOverlay.visibility = View.VISIBLE
+    }
+
+    private fun showBrowserFallback() {
+        if (embedBlocked) return
+        embedBlocked = true
+        Log.w(logTag, "embed rejected by provider; offering external browser source=${diagnosticUrl(sourceUrl)}")
+        progressBar.visibility = View.GONE
+        statusView.visibility = View.VISIBLE
+        statusView.textSize = 16f
+        statusView.text = "Il server video rifiuta il player interno. Apri il canale nel browser."
+        browserButton.visibility = View.VISIBLE
         loadingOverlay.visibility = View.VISIBLE
     }
 

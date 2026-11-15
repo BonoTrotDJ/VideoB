@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.10+11';
+  static const _appVersion = '1.0.12+14';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -1330,16 +1330,13 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       final playbackUrl = resolved['playbackUrl'] ?? rawUrl;
       final resolvedUrl = resolved['resolvedUrl'] ?? rawUrl;
       final referer = resolved['referer'] ?? rawUrl;
-      // L'iframe protetto deve usare la rete/WebView del telefono: il proxy
-      // OkHttp con DoH non conserva i cookie necessari a Turnstile.
-      final playerDoh = _isProtectedEmbed(playbackUrl) ||
-              _isProtectedEmbed(resolvedUrl)
-          ? false
-          : _networkDohForUrl(playbackUrl);
       await _channel.invokeMethod<void>('openUrl', <String, dynamic>{
         'url': playbackUrl,
         'referer': referer,
-        'dohEnabled': playerDoh,
+        // La VPN DNS locale inoltra solo pacchetti DNS; demandare al WebView
+        // tutte le richieste HTTP tramite OkHttp DoH bypassava quella rete e
+        // causava 403/stream vuoti sugli embed.
+        'dohEnabled': false,
       });
       if (!mounted) {
         return;

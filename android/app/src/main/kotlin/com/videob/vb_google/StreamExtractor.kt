@@ -138,9 +138,9 @@ object StreamExtractor {
             )
         }
 
-        Log.d(tag, "resolve embed fallback source=$sourceUrl iframe=$iframeUrl")
+        Log.d(tag, "resolve source-page fallback source=$sourceUrl iframe=$iframeUrl")
         return ResolvedStream(
-            streamUrl = iframeUrl,
+            streamUrl = sourceUrl,
             refererUrl = sourceUrl,
             isEmbed = true,
         )
