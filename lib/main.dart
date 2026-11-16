@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.15+22';
+  static const _appVersion = '1.0.16+24';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -1395,6 +1395,24 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       setState(() {
         _status = 'errore connessione video';
       });
+    }
+  }
+
+  /// Controllo manuale degli aggiornamenti: il lato nativo mostra un dialog
+  /// con l'esito (aggiornamento disponibile o già all'ultima versione).
+  Future<void> _checkForAppUpdate() async {
+    try {
+      await _channel.invokeMethod<void>('checkForUpdate');
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showToastStatus(error.message ?? 'controllo aggiornamento non riuscito');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      _showToastStatus('controllo aggiornamento non riuscito');
     }
   }
 
@@ -2859,15 +2877,21 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
                       isExpanded: true,
+                      isDense: true,
                       focusNode: _sportFilterFocusNode,
                       value: _availableSports.contains(_selectedSportFilter)
                           ? _selectedSportFilter
                           : null,
                       decoration: InputDecoration(
                         labelText: 'Filtro sport',
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                         helperText: _isNowMode
                             ? 'Disabilitato in modalità Link'
                             : null,
@@ -2906,9 +2930,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
                       isExpanded: true,
+                      isDense: true,
                       focusNode: _languageFilterFocusNode,
                       value:
                           _availableLanguages.contains(_selectedLanguageFilter)
@@ -2916,6 +2941,11 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                               : null,
                       decoration: const InputDecoration(
                         labelText: 'Filtro lingua',
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                       ),
                       items: <DropdownMenuItem<String>>[
                         const DropdownMenuItem<String>(
@@ -2949,12 +2979,18 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                         Navigator.of(context).pop();
                       },
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
                       isExpanded: true,
+                      isDense: true,
                       value: _selectedPlayerValue,
                       decoration: const InputDecoration(
                         labelText: 'Player',
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                       ),
                       items: <DropdownMenuItem<String>>[
                         const DropdownMenuItem<String>(
@@ -3066,6 +3102,49 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                         ),
                         icon: const Icon(Icons.playlist_add_rounded, size: 18),
                         label: const Text('Aggiungi Sport'),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: _checkForAppUpdate,
+                        style: ButtonStyle(
+                          padding: WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                          minimumSize: WidgetStateProperty.all(
+                            const Size(0, 36),
+                          ),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: const VisualDensity(
+                            horizontal: -2,
+                            vertical: -2,
+                          ),
+                          backgroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return Colors.black;
+                              }
+                              return null;
+                            },
+                          ),
+                          foregroundColor:
+                              WidgetStateProperty.resolveWith<Color?>(
+                            (Set<WidgetState> states) {
+                              if (states.contains(WidgetState.focused)) {
+                                return Colors.white;
+                              }
+                              return null;
+                            },
+                          ),
+                        ),
+                        icon: const Icon(Icons.system_update_rounded, size: 18),
+                        label: const Text('Cerca aggiornamento'),
                       ),
                     ),
                   ],

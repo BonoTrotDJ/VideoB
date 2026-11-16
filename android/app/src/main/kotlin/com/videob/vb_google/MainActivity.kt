@@ -331,9 +331,19 @@ class MainActivity : FlutterActivity() {
                     result.success(isAmazonDevice)
                 }
 
+                "checkForUpdate" -> {
+                    Log.w(logTag, "manual update check requested from menu")
+                    result.success(null)
+                    Updater.checkManually(this)
+                }
+
                 else -> result.notImplemented()
             }
         }
+
+        // Aggiornamento automatico: controlla l'ultima release su GitHub e,
+        // se più recente, propone scaricamento e installazione.
+        Updater.checkOnStartup(this)
     }
 
     private fun guessMimeType(url: String): String =

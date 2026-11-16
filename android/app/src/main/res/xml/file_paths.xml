@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Percorsi condivisi col package installer per l'auto-aggiornamento -->
+<paths>
+    <cache-path
+        name="updates"
+        path="update/" />
+</paths>
