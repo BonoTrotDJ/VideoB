@@ -29,6 +29,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import io.flutter.plugin.common.MethodChannel
 import java.io.FilterInputStream
 import okhttp3.Request
 
@@ -48,9 +49,124 @@ class PlayerActivity : Activity() {
     private var embedBlocked: Boolean = false
     private var challengeRetryCount: Int = 0
     private var pendingRetryRunnable: Runnable? = null
+    private var recreateCount: Int = 0
+    private var recreateScheduled: Boolean = false
+    private var nativeRetryCount: Int = 0
+    private var nativeRetryRunnable: Runnable? = null
+    private var errorCloseRunnable: Runnable? = null
+    private var tokenMessageActive: Boolean = false
     private val videobBridge = VideobBridge(
         webViewUserAgent = { runCatching { webView.settings.userAgentString }.getOrDefault("") },
+        onTokenAcquiring = {
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && !recreateScheduled) {
+                    tokenMessageActive = true
+                    statusView.visibility = View.VISIBLE
+                    statusView.text = "Token in acquisizione, la trasmissione sarà pronta tra pochi secondi"
+                    progressBar.visibility = View.VISIBLE
+                    loadingOverlay.visibility = View.VISIBLE
+                }
+            }
+        },
+        onPlaybackStarted = {
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    return@runOnUiThread
+                }
+                // Il video sta riproducendo: il messaggio del token può
+                // lasciare il posto alla trasmissione.
+                tokenMessageActive = false
+                loadingOverlay.visibility = View.GONE
+            }
+        },
+        onStreamOffline = { reloads ->
+            runOnUiThread {
+                tokenMessageActive = false
+                if (isFinishing || isDestroyed || recreateScheduled) {
+                    return@runOnUiThread
+                }
+                statusView.visibility = View.VISIBLE
+                if (reloads < MAX_EMBED_RELOADS) {
+                    statusView.text = "Stream non ancora attivo, riprovo automaticamente..."
+                    return@runOnUiThread
+                }
+                // I ricaricamenti della pagina non sono bastati: replico l'azione
+                // che l'utente fa a mano, cioè esco dal player e lo riapro.
+                // Il contatore nell'intent evita cicli infiniti se il canale è
+                // davvero offline.
+                if (recreateCount >= MAX_PLAYER_RECREATES) {
+                    Log.w(logTag, "stream still down after recreate #$recreateCount, giving up")
+                    statusView.text = "Canale momentaneamente offline, riprova più tardi."
+                    return@runOnUiThread
+                }
+                recreateScheduled = true
+                Log.w(logTag, "embed still down after $reloads reloads, reopening full flow (attempt ${recreateCount + 1}/$MAX_PLAYER_RECREATES)")
+                statusView.text = "Riavvio il canale..."
+                val runnable = Runnable {
+                    nativeRetryRunnable = null
+                    if (isFinishing || isDestroyed) {
+                        return@Runnable
+                    }
+                    releasePlayer()
+                    webView.stopLoading()
+                    // Riapertura completa: chiede a Dart di rifare il percorso
+                    // (risoluzione stream inclusa), identico all'uscita e alla
+                    // riapertura manuale del link. Se il canale non è
+                    // raggiungibile neanche così, il guard sul contatore evita
+                    // i cicli infiniti.
+                    val channel = MainActivity.dartChannel
+                    if (channel != null) {
+                        channel.invokeMethod(
+                            "reopenStream",
+                            mapOf(
+                                "url" to sourceUrl,
+                                "recreateCount" to recreateCount,
+                            ),
+                            object : MethodChannel.Result {
+                                override fun success(result: Any?) {}
+                                override fun error(
+                                    errorCode: String,
+                                    errorMessage: String?,
+                                    errorDetails: Any?,
+                                ) {
+                                    Log.w(logTag, "reopenStream error code=$errorCode, restarting player directly")
+                                    restartPlayerDirectly()
+                                }
+
+                                override fun notImplemented() {
+                                    Log.w(logTag, "reopenStream not implemented, restarting player directly")
+                                    restartPlayerDirectly()
+                                }
+                            },
+                        )
+                        finish()
+                    } else {
+                        Log.w(logTag, "dart channel unavailable, restarting player directly")
+                        restartPlayerDirectly()
+                    }
+                }
+                nativeRetryRunnable = runnable
+                webView.postDelayed(runnable, REOPEN_DELAY_MS)
+            }
+        },
     )
+
+    /**
+     * Fallback senza Dart: riavvia l'Activity del player con il contatore
+     * aggiornato (equivale a uscire e riaprire la stessa pagina).
+     */
+    private fun restartPlayerDirectly() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        val next = Intent(this, PlayerActivity::class.java)
+            .putExtra(EXTRA_URL, sourceUrl)
+            .putExtra(EXTRA_REFERER, sourceReferer)
+            .putExtra(EXTRA_DOH_ENABLED, dohEnabled)
+            .putExtra(EXTRA_RECREATE_COUNT, recreateCount + 1)
+        startActivity(next)
+        finish()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,6 +197,10 @@ class PlayerActivity : Activity() {
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         val referer = intent.getStringExtra(EXTRA_REFERER).orEmpty()
         dohEnabled = intent.getBooleanExtra(EXTRA_DOH_ENABLED, false)
+        recreateCount = intent.getIntExtra(EXTRA_RECREATE_COUNT, 0)
+        if (recreateCount > 0) {
+            Log.w(logTag, "player restarted by recreate #$recreateCount")
+        }
         if (url.isBlank()) {
             statusView.text = "URL non valido."
             return
@@ -401,7 +521,7 @@ class PlayerActivity : Activity() {
                         statusView.text = "Verifica di sicurezza in corso, attendi..."
                         progressBar.visibility = View.VISIBLE
                         loadingOverlay.visibility = View.VISIBLE
-                    } else if (!embedBlocked) {
+                    } else if (!embedBlocked && !tokenMessageActive) {
                         loadingOverlay.visibility = View.GONE
                     }
                 }
@@ -445,6 +565,59 @@ class PlayerActivity : Activity() {
                 };
                 window.open = function() { return null; };
               } catch (e) {}
+              // Token non ancora pronto: avvisa l'app per mostrare il messaggio
+              // "Token in acquisizione..." fin da subito.
+              if (window.VideobBridge && window.VideobBridge.notifyTokenAcquiring) {
+                window.VideobBridge.notifyTokenAcquiring();
+              }
+              // Quando il video riproduce davvero, chiudi l'overlay di
+              // caricamento (e il messaggio del token) nell'app.
+              var vbPlaybackReported = false;
+              setInterval(function() {
+                if (vbPlaybackReported) return;
+                try {
+                  var v = document.querySelector('video');
+                  if (v && !v.paused && v.readyState >= 2) {
+                    vbPlaybackReported = true;
+                    if (window.VideobBridge && window.VideobBridge.notifyPlaybackStarted) {
+                      window.VideobBridge.notifyPlaybackStarted();
+                    }
+                  }
+                } catch (e) {}
+              }, 1000);
+              // "STREAM IS OFFLINE" al primo avvio: ricarica la pagina (rifà
+              // verifica e prende un nuovo stream), max 2 volte; se l'evento
+              // e' davvero offline il messaggio resta a schermo.
+              var vbReloads = 0;
+              try {
+                vbReloads = parseInt(sessionStorage.getItem('__vbOfflineReloads') || '0', 10) || 0;
+              } catch (e) {}
+              var vbReloading = false;
+              var vbGiveUpReported = false;
+              setInterval(function() {
+                if (vbReloading || vbGiveUpReported) return;
+                try {
+                  var text = ((document.body && document.body.innerText) || '').toUpperCase();
+                  var isDown = text.indexOf('STREAM IS OFFLINE') !== -1 ||
+                      text.indexOf('NOT ALLOWED') !== -1 ||
+                      text.indexOf('CAPTCHA FAILED') !== -1;
+                  if (!isDown) return;
+                  if (vbReloads >= 2) {
+                    vbGiveUpReported = true;
+                    if (window.VideobBridge && window.VideobBridge.notifyStreamOffline) {
+                      window.VideobBridge.notifyStreamOffline(vbReloads);
+                    }
+                    return;
+                  }
+                  vbReloading = true;
+                  vbReloads++;
+                  try { sessionStorage.setItem('__vbOfflineReloads', String(vbReloads)); } catch (e) {}
+                  if (window.VideobBridge && window.VideobBridge.notifyStreamOffline) {
+                    window.VideobBridge.notifyStreamOffline(vbReloads);
+                  }
+                  setTimeout(function() { location.reload(); }, 2500);
+                } catch (e) {}
+              }, 1500);
             })();
             </script>
         """.trimIndent()
@@ -500,6 +673,7 @@ class PlayerActivity : Activity() {
         webViewRetryCount = 0
         challengeRetryCount = 0
         embedBlocked = false
+        tokenMessageActive = false
         cancelPendingWebViewRetry()
         browserButton.visibility = View.GONE
         releasePlayer()
@@ -577,6 +751,11 @@ class PlayerActivity : Activity() {
         pendingRetryRunnable = null
     }
 
+    private fun cancelPendingNativeRetry() {
+        nativeRetryRunnable?.let { webView.removeCallbacks(it) }
+        nativeRetryRunnable = null
+    }
+
     private fun looksLikeSecurityChallenge(title: String, pageStateJson: String): Boolean {
         val haystack = (title + " " + pageStateJson).lowercase()
         return haystack.contains("just a moment") ||
@@ -606,6 +785,22 @@ class PlayerActivity : Activity() {
         statusView.textSize = 18f
         statusView.text = message
         loadingOverlay.visibility = View.VISIBLE
+        // Dopo 4 secondi il player si chiude da solo e si torna alla lista.
+        cancelPendingErrorClose()
+        val runnable = Runnable {
+            errorCloseRunnable = null
+            if (!isFinishing && !isDestroyed) {
+                Log.w(logTag, "closing player after error message")
+                finish()
+            }
+        }
+        errorCloseRunnable = runnable
+        webView.postDelayed(runnable, ERROR_CLOSE_DELAY_MS)
+    }
+
+    private fun cancelPendingErrorClose() {
+        errorCloseRunnable?.let { webView.removeCallbacks(it) }
+        errorCloseRunnable = null
     }
 
     private fun showBrowserFallback() {
@@ -639,6 +834,7 @@ class PlayerActivity : Activity() {
                 embedBlocked = false
                 webViewRetryCount = 0
                 challengeRetryCount = 0
+                tokenMessageActive = false
                 browserButton.visibility = View.GONE
                 loadingOverlay.visibility = View.VISIBLE
                 progressBar.visibility = View.VISIBLE
@@ -668,13 +864,40 @@ class PlayerActivity : Activity() {
             object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     if (playbackState == Player.STATE_READY) {
+                        tokenMessageActive = false
                         loadingOverlay.visibility = View.GONE
                     }
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
-                    Log.e(logTag, "native playback error url=$url", error)
-                    showConnectionError()
+                    Log.e(logTag, "native playback error url=$url (retry $nativeRetryCount/$MAX_NATIVE_RETRIES)", error)
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) {
+                            return@runOnUiThread
+                        }
+                        // Al primo avvio lo stream può non essere ancora attivo
+                        // (m3u8 403/404 finché il canale non si attiva): riprovo
+                        // dopo una pausa prima di mostrare l'errore di connessione.
+                        if (nativeRetryCount < MAX_NATIVE_RETRIES) {
+                            nativeRetryCount++
+                            statusView.visibility = View.VISIBLE
+                            statusView.text = "Stream non ancora attivo, riprovo automaticamente..."
+                            cancelPendingNativeRetry()
+                            val runnable = Runnable {
+                                nativeRetryRunnable = null
+                                if (isFinishing || isDestroyed) {
+                                    return@Runnable
+                                }
+                                Log.w(logTag, "native retry #$nativeRetryCount for url=$url")
+                                releasePlayer()
+                                startNativePlayback(url)
+                            }
+                            nativeRetryRunnable = runnable
+                            webView.postDelayed(runnable, NATIVE_RETRY_DELAY_MS)
+                        } else {
+                            showConnectionError()
+                        }
+                    }
                 }
             },
         )
@@ -1129,6 +1352,8 @@ class PlayerActivity : Activity() {
     override fun onDestroy() {
         releasePlayer()
         cancelPendingWebViewRetry()
+        cancelPendingNativeRetry()
+        cancelPendingErrorClose()
         val parent = webView.parent
         if (parent is ViewGroup) {
             parent.removeView(webView)
@@ -1142,5 +1367,24 @@ class PlayerActivity : Activity() {
         const val EXTRA_URL = "extra_url"
         const val EXTRA_REFERER = "extra_referer"
         const val EXTRA_DOH_ENABLED = "extra_doh_enabled"
+        const val EXTRA_RECREATE_COUNT = "extra_recreate_count"
+
+        /** Ricaricamenti della pagina embed gestiti dal JS prima del riavvio. */
+        const val MAX_EMBED_RELOADS = 2
+
+        /** Quante volte il player si riavvia da solo (equivale a esci+riapri). */
+        const val MAX_PLAYER_RECREATES = 1
+
+        /** Ritentativi del player nativo prima dell'errore di connessione. */
+        const val MAX_NATIVE_RETRIES = 2
+
+        /** Pausa tra un tentativo e l'altro del player nativo. */
+        const val NATIVE_RETRY_DELAY_MS = 8000L
+
+        /** Pausa prima della riapertura completa del canale. */
+        const val REOPEN_DELAY_MS = 1500L
+
+        /** Tempo di visualizzazione del messaggio d'errore prima di chiudere. */
+        const val ERROR_CLOSE_DELAY_MS = 4000L
     }
 }

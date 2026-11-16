@@ -36,10 +36,12 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(
+        val channel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             channelName,
-        ).setMethodCallHandler { call, result ->
+        )
+        dartChannel = channel
+        channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "openUrl" -> {
                     val url = call.argument<String>("url")?.trim().orEmpty()
@@ -53,6 +55,10 @@ class MainActivity : FlutterActivity() {
                         putExtra(PlayerActivity.EXTRA_URL, url)
                         putExtra(PlayerActivity.EXTRA_REFERER, call.argument<String>("referer")?.trim().orEmpty())
                         putExtra(PlayerActivity.EXTRA_DOH_ENABLED, dohEnabled)
+                        putExtra(
+                            PlayerActivity.EXTRA_RECREATE_COUNT,
+                            call.argument<Int>("recreateCount") ?: 0,
+                        )
                     }
                     Log.d(logTag, "openUrl url=$url doh=$dohEnabled")
                     startActivity(intent)
@@ -544,6 +550,14 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val REQUEST_PREPARE_DNS_VPN = 1201
+
+        /**
+         * Canale verso Dart usato anche dal PlayerActivity per chiedere la
+         * riapertura completa di un canale (risoluzione stream inclusa).
+         */
+        @Volatile
+        var dartChannel: MethodChannel? = null
+
         private val EXTERNAL_PLAYER_CANDIDATES = listOf(
             ExternalPlayerCandidate("mx", "MX Player", "com.mxtech.videoplayer.ad"),
             ExternalPlayerCandidate("mxpro", "MX Player Pro", "com.mxtech.videoplayer.pro"),

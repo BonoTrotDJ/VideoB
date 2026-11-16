@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.14+16';
+  static const _appVersion = '1.0.15+22';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -972,6 +972,32 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       (_) => _autoRefreshImportedList(),
     );
     _loadLists();
+    // Il player interno segnala che l'embed resta giù anche dopo i
+    // ricaricamenti: rifaccio tutto il percorso (risoluzione dello stream
+    // inclusa), identico a quando l'utente esce dal player e riapre il link.
+    _channel.setMethodCallHandler(_handleNativeCall);
+  }
+
+  Future<dynamic> _handleNativeCall(MethodCall call) async {
+    if (call.method == 'reopenStream') {
+      final args = call.arguments;
+      final url = args is Map ? args['url']?.toString() ?? '' : '';
+      final recreateCount =
+          args is Map ? (args['recreateCount'] as num?)?.toInt() ?? 0 : 0;
+      if (url.isEmpty) {
+        return null;
+      }
+      if (recreateCount >= 1) {
+        // Doppia protezione anti-loop: il lato nativo ha già il suo guard,
+        // qui non riapriamo mai oltre il primo riavvio automatico.
+        setState(() {
+          _status = 'Canale momentaneamente offline, riprova più tardi.';
+        });
+        return null;
+      }
+      await _openUrl(url, recreateCount: recreateCount + 1);
+    }
+    return null;
   }
 
   @override
@@ -1316,6 +1342,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     String url, {
     String? entryId,
     String? entryName,
+    int recreateCount = 0,
   }) async {
     final rawUrl = url.trim();
     if (rawUrl.isEmpty) {
@@ -1337,6 +1364,8 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         // tutte le richieste HTTP tramite OkHttp DoH bypassava quella rete e
         // causava 403/stream vuoti sugli embed.
         'dohEnabled': false,
+        // Contatore dei riavvii automatici del player (anti-loop).
+        'recreateCount': recreateCount,
       });
       if (!mounted) {
         return;

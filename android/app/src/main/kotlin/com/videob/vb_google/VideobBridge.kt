@@ -15,12 +15,49 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * normale passano. La pagina iniettata da PlayerActivity reindirizza la POST
  * a questo bridge, che la esegue con OkHttp e restituisce il JSON.
  */
-class VideobBridge(private val webViewUserAgent: () -> String) {
+class VideobBridge(
+    private val webViewUserAgent: () -> String,
+    private val onTokenAcquiring: () -> Unit = {},
+    private val onPlaybackStarted: () -> Unit = {},
+    private val onStreamOffline: (Int) -> Unit = {},
+) {
     private val tag = "VideoBBridge"
 
     private val chromeUserAgent =
         "Mozilla/5.0 (Linux; Android 14; Google TV) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+    /**
+     * La pagina iniettata segnala che il video sta davvero riproducendo:
+     * l'app chiude l'overlay di caricamento e il messaggio del token.
+     */
+    @JavascriptInterface
+    fun notifyPlaybackStarted() {
+        Log.w(tag, "playback started reported by page")
+        runCatching { onPlaybackStarted() }
+    }
+
+    /**
+     * La pagina iniettata segnala che il token della verifica (Turnstile) non
+     * c'e' ancora: l'app mostra l'avviso "Token in acquisizione..." mentre la
+     * verifica gira in background.
+     */
+    @JavascriptInterface
+    fun notifyTokenAcquiring() {
+        Log.w(tag, "token acquiring reported by page")
+        runCatching { onTokenAcquiring() }
+    }
+
+    /**
+     * La pagina iniettata segnala lo stato "STREAM IS OFFLINE" del player
+     * embed: l'app mostra l'avviso e ricarica la pagina (rifà la verifica e
+     * ottiene un nuovo stream URL), come farebbe l'utente uscendo e rientrando.
+     */
+    @JavascriptInterface
+    fun notifyStreamOffline(reloads: Int) {
+        Log.w(tag, "stream offline reported, reload #$reloads scheduled")
+        runCatching { onStreamOffline(reloads) }
+    }
 
     /**
      * Esegue la POST /turnstile/<id> e restituisce il corpo JSON della risposta.
