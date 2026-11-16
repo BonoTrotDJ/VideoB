@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.13+15';
+  static const _appVersion = '1.0.14+16';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -2811,12 +2811,12 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         child: SafeArea(
           child: LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
-              return SingleChildScrollView(
-                child: ConstrainedBox(
-                  constraints:
-                      BoxConstraints(minHeight: constraints.maxHeight),
-                  child: IntrinsicHeight(
-                    child: Column(
+              return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               Padding(
@@ -3042,8 +3042,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                   ],
                 ),
               ),
-              const Divider(height: 1),
-              const Spacer(),
+                    ],
+                  ),
+                ),
+              ),
               const Divider(height: 1),
               SwitchListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -3081,20 +3083,21 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                       ),
                     ),
                     const SizedBox(height: 2),
-                    SelectableText(
-                      _projectUrl,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: Colors.white70,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerStart,
+                      child: SelectableText(
+                        _projectUrl,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
             ],
-          ),
-                  ),
-                ),
-              );
+        );
             },
           ),
         ),

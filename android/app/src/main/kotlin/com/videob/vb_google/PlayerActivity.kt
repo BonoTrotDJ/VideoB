@@ -48,6 +48,9 @@ class PlayerActivity : Activity() {
     private var embedBlocked: Boolean = false
     private var challengeRetryCount: Int = 0
     private var pendingRetryRunnable: Runnable? = null
+    private val videobBridge = VideobBridge(
+        webViewUserAgent = { runCatching { webView.settings.userAgentString }.getOrDefault("") },
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,6 +74,9 @@ class PlayerActivity : Activity() {
         webView.keepScreenOn = true
         playerView.keepScreenOn = true
         loadingOverlay.keepScreenOn = true
+        // Bridge per la POST /turnstile: la WebView TV viene rifiutata dal
+        // server (403), OkHttp con User-Agent da browser passa.
+        webView.addJavascriptInterface(videobBridge, "VideobBridge")
 
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         val referer = intent.getStringExtra(EXTRA_REFERER).orEmpty()
@@ -140,7 +146,30 @@ class PlayerActivity : Activity() {
                     )
                 }
                 if (!dohEnabled) {
-                    return super.shouldInterceptRequest(view, request)
+                    // Anche senza DoH instradamo le navigazioni verso gli embed
+                    // (frame /e/<id>): il server player esige le intestazioni
+                    // Sec-Fetch e molte WebView TV non le inviano correttamente,
+                    // ricevendo 403 / "Not allowed" (schermo nero).
+                    val targetEarly = request?.url?.toString()?.trim().orEmpty()
+                    val embedPathEarly =
+                        runCatching { android.net.Uri.parse(targetEarly).path.orEmpty() }
+                            .getOrDefault("")
+                    val headersEarly = request?.requestHeaders.orEmpty()
+                    val fetchModeEarly = headersEarly.entries
+                        .firstOrNull { it.key.equals("Sec-Fetch-Mode", ignoreCase = true) }
+                        ?.value
+                    val acceptEarly = headersEarly.entries
+                        .firstOrNull { it.key.equals("Accept", ignoreCase = true) }
+                        ?.value
+                    val isNavigationEarly = fetchModeEarly.equals("navigate", true) ||
+                        (acceptEarly?.contains("text/html") == true &&
+                            request?.method.equals("GET", true))
+                    val looksLikeEmbedEarly =
+                        embedPathEarly.startsWith("/e/") ||
+                            targetEarly.contains(".dynbush.net")
+                    if (!(isNavigationEarly && looksLikeEmbedEarly)) {
+                        return super.shouldInterceptRequest(view, request)
+                    }
                 }
 
                 val target = request?.url?.toString()?.trim().orEmpty()
@@ -154,15 +183,49 @@ class PlayerActivity : Activity() {
                     return super.shouldInterceptRequest(view, request)
                 }
                 val webRequest = request ?: return null
+                val requestHeaders = webRequest.requestHeaders.orEmpty()
+                val fetchMode = requestHeaders.entries
+                    .firstOrNull { it.key.equals("Sec-Fetch-Mode", ignoreCase = true) }
+                    ?.value
+                val accept = requestHeaders.entries
+                    .firstOrNull { it.key.equals("Accept", ignoreCase = true) }
+                    ?.value
+                val isNavigation = fetchMode.equals("navigate", true) ||
+                    (accept?.contains("text/html") == true &&
+                        webRequest.method.equals("GET", true))
+                val embedPath = runCatching {
+                    android.net.Uri.parse(target).path.orEmpty()
+                }.getOrDefault("")
+                val looksLikeEmbed = embedPath.startsWith("/e/") ||
+                    target.contains(".dynbush.net")
 
                 return runCatching {
                     val requestBuilder = Request.Builder().url(target)
-                    for ((name, value) in webRequest.requestHeaders) {
-                        if (!name.equals("Accept-Encoding", ignoreCase = true)) {
+                    for ((name, value) in requestHeaders) {
+                        if (!name.equals("Accept-Encoding", ignoreCase = true) &&
+                            !name.startsWith("Sec-Fetch", ignoreCase = true)
+                        ) {
                             requestBuilder.header(name, value)
                         }
                     }
-                    if (webRequest.requestHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+                    // Il server embed rifiuta le richieste senza intestazioni
+                    // Sec-Fetch: si forniscono valori validi quando la WebView
+                    // non li invia (frame = iframe, pagina = document).
+                    val siteHeader = requestHeaders.entries
+                        .firstOrNull { it.key.equals("Sec-Fetch-Site", ignoreCase = true) }
+                        ?.value
+                        ?: if (webRequest.isForMainFrame) "none" else "cross-site"
+                    val destHeader = requestHeaders.entries
+                        .firstOrNull { it.key.equals("Sec-Fetch-Dest", ignoreCase = true) }
+                        ?.value
+                        ?: if (webRequest.isForMainFrame) "document" else "iframe"
+                    requestBuilder.header("Sec-Fetch-Site", siteHeader)
+                    requestBuilder.header("Sec-Fetch-Mode", "navigate")
+                    requestBuilder.header("Sec-Fetch-Dest", destHeader)
+                    if (webRequest.isForMainFrame) {
+                        requestBuilder.header("Sec-Fetch-User", "?1")
+                    }
+                    if (requestHeaders.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
                         requestBuilder.header("User-Agent", webView.settings.userAgentString)
                     }
                     CookieManager.getInstance().getCookie(target)?.let { cookie ->
@@ -170,9 +233,16 @@ class PlayerActivity : Activity() {
                     }
                     requestBuilder.header("Accept-Encoding", "identity")
 
-                    val response = NetworkClientFactory.get(true)
+                    val response = NetworkClientFactory.get(dohEnabled)
                         .newCall(requestBuilder.build())
                         .execute()
+                    if (isNavigation && !webRequest.isForMainFrame && response.code >= 400) {
+                        Log.w(
+                            logTag,
+                            "embed navigation failed via proxy code=${response.code} url=${diagnosticUrl(target)}",
+                        )
+                        webView.post { showBrowserFallback() }
+                    }
                     val body = response.body ?: run {
                         response.close()
                         return@runCatching null
@@ -188,6 +258,27 @@ class PlayerActivity : Activity() {
                         CookieManager.getInstance().setCookie(target, cookie)
                     }
                     headers.remove("content-encoding")
+
+                    // Pagina player embed: inietta l'hook che devia la POST
+                    // /turnstile/<id> verso il bridge OkHttp e rimuove lo
+                    // script dei popunder (finestre pubblicitarie).
+                    val isHtmlResponse = mimeType.contains("html", ignoreCase = true)
+                    if (isNavigation && looksLikeEmbed && response.isSuccessful && isHtmlResponse) {
+                        val charset = contentType?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
+                        val html = body.string()
+                        val patched = patchEmbedHtml(html)
+                        response.close()
+                        Log.d(logTag, "embed page patched len=${patched.length} url=${diagnosticUrl(target)}")
+                        return@runCatching WebResourceResponse(
+                            mimeType,
+                            encoding,
+                            response.code,
+                            response.message.ifBlank { "OK" },
+                            headers,
+                            patched.byteInputStream(charset),
+                        )
+                    }
+
                     val stream = object : FilterInputStream(body.byteStream()) {
                         override fun close() {
                             super.close()
@@ -322,6 +413,59 @@ class PlayerActivity : Activity() {
         val uri = android.net.Uri.parse(rawUrl)
         uri.buildUpon().clearQuery().fragment(null).build().toString()
     }.getOrDefault("<url non valida>")
+
+    /**
+     * Prepara la pagina player dell'embed per la WebView TV:
+     *  1. rimuove lo script dei popunder (finestre pubblicitarie);
+     *  2. inietta un hook su window.fetch che devia la POST /turnstile/<id>
+     *     verso VideobBridge (OkHttp), perché la WebView TV riceve 403.
+     */
+    private fun patchEmbedHtml(html: String): String {
+        val hook = """
+            <script>
+            (function() {
+              if (window.__vbTurnstileHook) return;
+              window.__vbTurnstileHook = true;
+              try {
+                var _vbFetch = window.fetch;
+                window.fetch = function(input, init) {
+                  try {
+                    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+                    var method = ((init && init.method) || (input && input.method) || 'GET').toString().toUpperCase();
+                    if (method === 'POST' && url.indexOf('/turnstile/') !== -1) {
+                      var body = (init && typeof init.body === 'string') ? init.body : (init && init.body ? String(init.body) : '');
+                      var abs = new URL(url, location.href).href;
+                      if (window.VideobBridge && window.VideobBridge.postTurnstile) {
+                        var json = window.VideobBridge.postTurnstile(abs, location.href, body);
+                        return Promise.resolve(new Response(json, {status: 200, headers: {'Content-Type': 'application/json'}}));
+                      }
+                    }
+                  } catch (e) {}
+                  return _vbFetch.apply(window, arguments);
+                };
+                window.open = function() { return null; };
+              } catch (e) {}
+            })();
+            </script>
+        """.trimIndent()
+
+        var patched = html
+        // Popunder: blocco <script> inline con la firma "popundersPerIP"
+        // (il contenuto non deve attraversare un </script> precedente).
+        val popunderRegex = Regex(
+            """<script(?![^>]*\bsrc=)[^>]*>(?:(?!</script>)[\s\S])*?popundersPerIP(?:(?!</script>)[\s\S])*?</script>""",
+            RegexOption.IGNORE_CASE,
+        )
+        patched = popunderRegex.replace(patched, "")
+
+        val lowered = patched.lowercase()
+        val injectAt = lowered.lastIndexOf("</body>")
+        return if (injectAt >= 0) {
+            patched.substring(0, injectAt) + hook + patched.substring(injectAt)
+        } else {
+            patched + hook
+        }
+    }
 
     /**
      * Alcuni provider bloccano la riproduzione se rilevano che la pagina gira

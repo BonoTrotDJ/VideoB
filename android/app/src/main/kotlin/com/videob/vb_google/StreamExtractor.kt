@@ -121,7 +121,7 @@ object StreamExtractor {
 
         val iframeUrl = extractFirstIframeUrl(html, sourceUrl) ?: return null
         Log.d(tag, "resolve iframe found iframe=$iframeUrl source=$sourceUrl")
-        val embedHtml = download(iframeUrl, useDoh, sourceUrl)
+        val embedHtml = download(iframeUrl, useDoh, sourceUrl, fetchDest = "iframe")
         extractFirstStreamUrl(embedHtml)?.let { streamUrl ->
             Log.d(tag, "resolve stream found on embed stream=$streamUrl referer=$iframeUrl")
             return ResolvedStream(
@@ -233,7 +233,12 @@ object StreamExtractor {
         return null
     }
 
-    private fun download(url: String, useDoh: Boolean, refererUrl: String): String {
+    private fun download(
+        url: String,
+        useDoh: Boolean,
+        refererUrl: String,
+        fetchDest: String = "document",
+    ): String {
         val request = Request.Builder()
             .url(url)
             .header(
@@ -242,6 +247,12 @@ object StreamExtractor {
                     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             )
             .header("Referer", refererUrl)
+            // Il server player (embed /e/<id>) risponde "Not allowed" alle
+            // richieste prive di intestazioni Sec-Fetch: vanno sempre inviate.
+            .header("Sec-Fetch-Site", "cross-site")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Dest", fetchDest)
+            .header("Sec-Fetch-User", "?1")
             .build()
 
         NetworkClientFactory.get(useDoh).newCall(request).execute().use { response ->
