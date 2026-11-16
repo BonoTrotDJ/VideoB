@@ -13,6 +13,10 @@ object NetworkClientFactory {
             .readTimeout(30, TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
+            // Cookie condivisi con la WebView e persistiti su disco: senza
+            // questo jar ogni richiesta ripartiva "non autorizzata" e i link
+            // funzionavano solo dopo aver aperto la pagina in un browser.
+            .cookieJar(WebViewCookieJar)
             .build()
     }
 

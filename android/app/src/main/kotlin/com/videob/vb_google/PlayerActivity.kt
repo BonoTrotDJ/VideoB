@@ -46,6 +46,8 @@ class PlayerActivity : Activity() {
     private var sourceReferer: String = ""
     private var webViewRetryCount: Int = 0
     private var embedBlocked: Boolean = false
+    private var challengeRetryCount: Int = 0
+    private var pendingRetryRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -251,6 +253,23 @@ class PlayerActivity : Activity() {
                         "web HTTP error frame=${request.isForMainFrame} url=${diagnosticUrl(request.url.toString())} code=${errorResponse.statusCode} mime=${errorResponse.mimeType} reason=${errorResponse.reasonPhrase}",
                     )
                 }
+                // Un 403 sul frame principale è in genere la pagina di verifica
+                // antabot (es. Cloudflare): il suo JavaScript gira nella WebView
+                // e al termine ricarica la pagina da solo. Ricaricare subito
+                // annullerebbe la verifica; si riprova solo dopo un intervallo
+                // ampio e solo se nel frattempo la pagina non si è già mossa.
+                if (request?.isForMainFrame == true && errorResponse?.statusCode == 403) {
+                    if (challengeRetryCount < 2) {
+                        challengeRetryCount++
+                        scheduleDelayedWebViewRetry(delayMs = 8_000L)
+                    } else {
+                        // Più 403 di fila nonostante i retry: blocco reale,
+                        // non una verifica; propone il browser esterno.
+                        Log.w(logTag, "main frame still 403 after retries; offering browser fallback")
+                        showBrowserFallback()
+                    }
+                    return
+                }
                 if (request?.isForMainFrame == true && (errorResponse?.statusCode ?: 0) >= 400) {
                     retryWebViewOnce()
                 }
@@ -265,6 +284,9 @@ class PlayerActivity : Activity() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 Log.d(logTag, "page started url=${diagnosticUrl(url)}")
+                // La pagina si è mossa (o la verifica è completata): annulla
+                // l'eventuale retry in coda per non sovrascrivere la nuova pagina.
+                cancelPendingWebViewRetry()
                 view.evaluateJavascript(disguiseAsChromeJs, null)
             }
 
@@ -281,6 +303,13 @@ class PlayerActivity : Activity() {
                     if (title.equals("Not allowed", ignoreCase = true) ||
                         result.contains("Not allowed") || result.contains("domain protected")) {
                         showConnectionError("Il canale ha rifiutato l'apertura dell'embed.")
+                    } else if (looksLikeSecurityChallenge(title, result)) {
+                        // Verifica antabot in corso: lascia girare il suo
+                        // JavaScript; al termine la pagina si ricarica da sola.
+                        Log.d(logTag, "security challenge detected on url=$url; waiting for it to complete")
+                        statusView.text = "Verifica di sicurezza in corso, attendi..."
+                        progressBar.visibility = View.VISIBLE
+                        loadingOverlay.visibility = View.VISIBLE
                     } else if (!embedBlocked) {
                         loadingOverlay.visibility = View.GONE
                     }
@@ -325,7 +354,9 @@ class PlayerActivity : Activity() {
         sourceUrl = url
         sourceReferer = referer
         webViewRetryCount = 0
+        challengeRetryCount = 0
         embedBlocked = false
+        cancelPendingWebViewRetry()
         browserButton.visibility = View.GONE
         releasePlayer()
         webView.visibility = View.VISIBLE
@@ -367,6 +398,51 @@ class PlayerActivity : Activity() {
         }, 1200L)
     }
 
+    /**
+     * Riprova il caricamento dopo un ritardo, senza consumare il conteggio dei
+     * retry immediati. Usato per lasciare tempo alle verifiche antabot di
+     * completarsi nella WebView; se nel frattempo la pagina naviga da sola
+     * (verifica superata) il retry viene annullato.
+     */
+    private fun scheduleDelayedWebViewRetry(delayMs: Long) {
+        if (sourceUrl.isBlank()) {
+            return
+        }
+        cancelPendingWebViewRetry()
+        statusView.text = "Verifica di sicurezza in corso, attendi..."
+        loadingOverlay.visibility = View.VISIBLE
+        progressBar.visibility = View.VISIBLE
+        val runnable = Runnable {
+            pendingRetryRunnable = null
+            if (isFinishing || isDestroyed) {
+                return@Runnable
+            }
+            Log.d(logTag, "delayed webview retry after challenge window source=${diagnosticUrl(sourceUrl)}")
+            val refererUrl = sourceReferer.ifBlank { sourceUrl }
+            webView.loadUrl(
+                sourceUrl,
+                mapOf("Referer" to refererUrl),
+            )
+        }
+        pendingRetryRunnable = runnable
+        webView.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelPendingWebViewRetry() {
+        pendingRetryRunnable?.let { webView.removeCallbacks(it) }
+        pendingRetryRunnable = null
+    }
+
+    private fun looksLikeSecurityChallenge(title: String, pageStateJson: String): Boolean {
+        val haystack = (title + " " + pageStateJson).lowercase()
+        return haystack.contains("just a moment") ||
+            haystack.contains("attention required") ||
+            haystack.contains("challenge-platform") ||
+            haystack.contains("cf-chl") ||
+            haystack.contains("verifica di sicurezza") ||
+            haystack.contains("checking your browser")
+    }
+
     private fun showConnectionError() {
         showConnectionError("Errore Connessione")
     }
@@ -395,9 +471,42 @@ class PlayerActivity : Activity() {
         progressBar.visibility = View.GONE
         statusView.visibility = View.VISIBLE
         statusView.textSize = 16f
-        statusView.text = "Il server video rifiuta il player interno. Apri il canale nel browser."
+        statusView.text =
+            "Il server video rifiuta il player interno. Apri il canale nel browser: " +
+                "al ritorno in app il collegamento viene riprovato automaticamente."
         browserButton.visibility = View.VISIBLE
-        loadingOverlay.visibility = View.VISIBLE
+        loadingOverlay.visibility = View.GONE
+    }
+
+    /**
+     * Al ritorno in primo piano (tipicamente dopo aver aperto la sorgente nel
+     * browser, dove la protezione antabot viene superata) si riprova a caricare
+     * il canale nella WebView. La riprova avviene solo se il player è ancora
+     * bloccato, così non interferisce con la riproduzione in corso.
+     */
+    override fun onResume() {
+        super.onResume()
+        if (embedBlocked && sourceUrl.isNotBlank() && !isFinishing && !isDestroyed) {
+            Log.d(logTag, "resume while embed blocked; retrying webview load source=${diagnosticUrl(sourceUrl)}")
+            webView.postDelayed({
+                if (isFinishing || isDestroyed || !embedBlocked) {
+                    return@postDelayed
+                }
+                embedBlocked = false
+                webViewRetryCount = 0
+                challengeRetryCount = 0
+                browserButton.visibility = View.GONE
+                loadingOverlay.visibility = View.VISIBLE
+                progressBar.visibility = View.VISIBLE
+                statusView.visibility = View.VISIBLE
+                statusView.text = "Riprovo il collegamento..."
+                val refererUrl = sourceReferer.ifBlank { sourceUrl }
+                webView.loadUrl(
+                    sourceUrl,
+                    mapOf("Referer" to refererUrl),
+                )
+            }, 800L)
+        }
     }
 
     private fun startNativePlayback(url: String) {
@@ -875,6 +984,7 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         releasePlayer()
+        cancelPendingWebViewRetry()
         val parent = webView.parent
         if (parent is ViewGroup) {
             parent.removeView(webView)
