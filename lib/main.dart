@@ -733,7 +733,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.16+24';
+  static const _appVersion = '1.0.17+25';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -1004,7 +1004,11 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _liveTick.value++;
-      if (DateTime.now().difference(_lastAutoRefresh) > const Duration(minutes: 1)) {
+      // Riapertura dell'app (ritorno dallo sfondo): come all'avvio si
+      // riallinea la lista solo se l'ultimo aggiornamento non è di oggi.
+      if (DateTime.now().difference(_lastAutoRefresh) >
+              const Duration(minutes: 1) &&
+          _selectedListNeedsOpenRefresh()) {
         _autoRefreshImportedList();
       }
     }
@@ -1113,6 +1117,40 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     });
 
     await _persistLists();
+
+    // All'avvio aggiorna la lista solo se l'ultimo aggiornamento risale a un
+    // giorno precedente: se è già stata aggiornata oggi non si tocca la rete.
+    unawaited(_refreshStaleImportedListOnLaunch());
+  }
+
+  /// Indica se la lista importata selezionata va riallineata all'apertura
+  /// dell'app: serve una sorgente valida e un ultimo aggiornamento non di oggi.
+  bool _selectedListNeedsOpenRefresh() {
+    final list = _selectedList;
+    if (list == null || list.sourceType != _VideoListSourceType.imported) {
+      return false;
+    }
+    if ((list.sourceUrl?.trim() ?? '').isEmpty) {
+      return false;
+    }
+
+    final lastUpdate = list.updatedAt;
+    if (lastUpdate == null) {
+      return true;
+    }
+    final now = DateTime.now();
+    return lastUpdate.year != now.year ||
+        lastUpdate.month != now.month ||
+        lastUpdate.day != now.day;
+  }
+
+  /// Aggiorna all'apertura dell'app la lista importata selezionata soltanto
+  /// quando il suo ultimo aggiornamento non è di oggi.
+  Future<void> _refreshStaleImportedListOnLaunch() async {
+    if (!_selectedListNeedsOpenRefresh()) {
+      return;
+    }
+    await _autoRefreshImportedList();
   }
 
   List<_VideoList> _parseStoredLists(String? rawLists) {
