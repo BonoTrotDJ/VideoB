@@ -5,9 +5,9 @@ Video BonoTrot e un lettore video per Android TV / Google TV che apre stream da 
 ## Download
 
 - Ultima release: `https://github.com/BonoTrotDJ/VideoB/releases/latest`
-- Release `v1.0.17`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.17`
-- APK `v1.0.17` : `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.17/VideoB-v1.0.17.apk`
-- codice Downloader per installazione diretta: `4488709`
+- Release `v1.0.18`: `https://github.com/BonoTrotDJ/VideoB/releases/tag/v1.0.18`
+- APK `v1.0.18` : `https://github.com/BonoTrotDJ/VideoB/releases/download/v1.0.18/VideoB-v1.0.18.apk`
+- codice Downloader per installazione diretta: `7010986`
 
 L'app permette di:
 
@@ -26,7 +26,7 @@ L'app permette di:
 - versione aggiornata per la corretta visione anche su Amazon Fire TV Stick
 - nuova grafica scura con schede evento più compatte, badge `LIVE` e colori per sport
 - badge `LIVE` aggiornato ogni 30 secondi
-- aggiornamento automatico della lista importata ogni 5 minuti e alla riapertura dell'app
+- aggiornamento automatico della lista importata ogni 5 minuti e all'avvio dell'app solo se l'ultimo aggiornamento non è di oggi
 - `Link salvati`: i link dei canali già visti restano raggiungibili per 30 giorni, anche se non sono più negli eventi
 - segue anche le liste secondarie `.txt` pubblicate dalla sorgente, come `247.txt`
 
