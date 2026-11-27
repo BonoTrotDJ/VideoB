@@ -58,6 +58,14 @@ android {
             signingConfig = keystorePropertiesFile.exists()
                 ? signingConfigs.release
                 : signingConfigs.debug
+            // Renditori R8 e rimozione risorse inutilizzate: APK piu piccolo
+            // e avvio piu veloce sulle TV low-end (Fire TV Stick).
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }

@@ -346,6 +346,14 @@ class MainActivity : FlutterActivity() {
         Updater.checkOnStartup(this)
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        // Senza questo override dartChannel (statico) tiene per sempre il
+        // riferimento all'engine distrutta: leak dell'engine e rischio di
+        // invokeMethod su un canale morto da parte di PlayerActivity.
+        super.cleanUpFlutterEngine(flutterEngine)
+        dartChannel = null
+    }
+
     private fun guessMimeType(url: String): String =
         when {
             url.contains(".m3u8", ignoreCase = true) ||

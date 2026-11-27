@@ -213,19 +213,30 @@ object Updater {
             }.onSuccess {
                 Log.w(tag, "update downloaded: ${destination.absolutePath} (${destination.length()} bytes)")
                 activity.runOnUiThread {
-                    progress.dismiss()
+                    // Il download dura minuti: l'activity puo essere stata
+                    // distrutta nel frattempo (rotazione, chiusura) e
+                    // dismiss()/show() su finestra morta crasherebbero.
+                    if (activity.isFinishing || activity.isDestroyed) {
+                        return@runOnUiThread
+                    }
+                    runCatching { progress.dismiss() }
                     installApk(activity, destination)
                 }
             }.onFailure { error ->
                 Log.w(tag, "update download failed: ${error.message}")
                 activity.runOnUiThread {
-                    progress.dismiss()
+                    if (activity.isFinishing || activity.isDestroyed) {
+                        return@runOnUiThread
+                    }
+                    runCatching { progress.dismiss() }
                     AlertDialog.Builder(activity)
                         .setTitle("Aggiornamento non riuscito")
                         .setMessage("Scaricamento fallito: ${error.message}")
                         .setPositiveButton("Chiudi", null)
                         .show()
                 }
+            }.also {
+                executor.shutdown()
             }
         }
     }

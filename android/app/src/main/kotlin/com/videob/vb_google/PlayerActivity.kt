@@ -378,6 +378,13 @@ class PlayerActivity : Activity() {
                         CookieManager.getInstance().setCookie(target, cookie)
                     }
                     headers.remove("content-encoding")
+                    // Header hop-by-hop / non validi su una risposta
+                    // ricostruita: content-length non corrisponde più al
+                    // body (soprattutto sull'HTML patchato), transfer-encoding
+                    // e set-cookie non vanno inoltrati alla WebView.
+                    headers.remove("content-length")
+                    headers.remove("transfer-encoding")
+                    headers.remove("set-cookie")
 
                     // Pagina player embed: inietta l'hook che devia la POST
                     // /turnstile/<id> verso il bridge OkHttp e rimuove lo
@@ -412,6 +419,11 @@ class PlayerActivity : Activity() {
                         response.message.ifBlank { "OK" },
                         headers,
                         stream,
+                    )
+                }.onFailure { error ->
+                    Log.w(
+                        logTag,
+                        "web intercept failed url=${diagnosticUrl(target)} error=${error.message}",
                     )
                 }.getOrNull()
             }
@@ -1361,6 +1373,14 @@ class PlayerActivity : Activity() {
         webView.stopLoading()
         webView.destroy()
         super.onDestroy()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Andando in background (home, app esterna) il video continuerebbe a
+        // suonare con lo schermo sempre acceso: metto in pausa; al ritorno
+        // in primo piano resta in pausa, l'utente preme play per riprendere.
+        exoPlayer?.pause()
     }
 
     companion object {

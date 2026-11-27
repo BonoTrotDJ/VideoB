@@ -31,7 +31,10 @@ class DnsVpnService : VpnService() {
                 }
             }
         }
-        return START_STICKY
+        // START_NOT_STICKY: dopo un kill del processo il tunnel non va
+        // ristabilito da solo; lo stato attivo lo decide sempre l'utente
+        // (e viene ripristinato dall'app al lancio con getDnsVpnEnabled).
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -73,20 +76,37 @@ class DnsVpnService : VpnService() {
     }
 
     private fun runDnsLoop(vpnFd: ParcelFileDescriptor) {
-        FileInputStream(vpnFd.fileDescriptor).use { input ->
-            FileOutputStream(vpnFd.fileDescriptor).use { output ->
-                val packetBuffer = ByteArray(MAX_PACKET_SIZE)
+        // La chiusura del fd da stopVpn() interrompe input.read() con
+        // IOException: serve un try/catch, un'eccezione non gestita qui
+        // uccide l'intero processo.
+        try {
+            FileInputStream(vpnFd.fileDescriptor).use { input ->
+                FileOutputStream(vpnFd.fileDescriptor).use { output ->
+                    val packetBuffer = ByteArray(MAX_PACKET_SIZE)
 
-                while (running.get()) {
-                    val length = input.read(packetBuffer)
-                    if (length <= 0) {
-                        continue
+                    while (running.get()) {
+                        val length = try {
+                            input.read(packetBuffer)
+                        } catch (_: Exception) {
+                            break
+                        }
+                        // EOF o read() <= 0: esce subito, un continue qui
+                        // diventerebbe un busy-spin al 100% di CPU.
+                        if (length <= 0) {
+                            break
+                        }
+
+                        val responsePacket = handlePacket(packetBuffer, length) ?: continue
+                        try {
+                            output.write(responsePacket)
+                        } catch (_: Exception) {
+                            break
+                        }
                     }
-
-                    val responsePacket = handlePacket(packetBuffer, length) ?: continue
-                    output.write(responsePacket)
                 }
             }
+        } catch (_: Exception) {
+            // Fd chiuso da stopVpn(): uscita normale del loop.
         }
     }
 

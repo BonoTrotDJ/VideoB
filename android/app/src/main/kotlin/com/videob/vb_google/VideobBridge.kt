@@ -100,7 +100,14 @@ class VideobBridge(
                             builder.header("Cookie", cookie)
                         }
                     }
-                    NetworkClientFactory.get(false)
+                    // Questo metodo e sincrono sul thread JavascriptInterface:
+                    // con i timeout di default (15s connect + 30s read) per
+                    // tentativo la pagina resterebbe congelata fino a 90s.
+                    // Client derivato con callTimeout totale di 10s.
+                    val bridgeClient = NetworkClientFactory.get(false).newBuilder()
+                        .callTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+                    bridgeClient
                         .newCall(builder.build())
                         .execute()
                         .use { response ->

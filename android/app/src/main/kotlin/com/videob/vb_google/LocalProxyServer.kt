@@ -58,9 +58,18 @@ object LocalProxyServer {
     }
 
     private fun ensureStarted(): ServerSocket {
-        serverSocket?.let { return it }
+        val existing = serverSocket
+        if (existing != null && !existing.isClosed) {
+            return existing
+        }
 
-        val socket = ServerSocket(0, 50, InetAddress.getByName("0.0.0.0"))
+        // Bind esplicito su 127.0.0.1 (IPv4): le URL generate sotto usano il
+        // letterale "127.0.0.1". NOTA: getLoopbackAddress() su Android può
+        // restituire ::1 (IPv6) e il player allora ottiene "connection
+        // refused" su 127.0.0.1; il bind wildcard 0.0.0.0 esporrebbe invece
+        // un proxy SSRF aperto a tutta la rete locale. Se la porta presa è
+        // libera anche in IPv4 il socket genera URL sempre coerenti.
+        val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
         serverSocket = socket
         Log.d(tag, "Local proxy started on port=${socket.localPort}")
 
@@ -69,10 +78,11 @@ object LocalProxyServer {
                 try {
                     val client = socket.accept()
                     clientExecutor.execute { handleClient(client) }
-                } catch (_: Exception) {
+                } catch (error: Exception) {
                     if (socket.isClosed) {
                         return@execute
                     }
+                    Log.d(tag, "Proxy accept error", error)
                 }
             }
         }
@@ -81,6 +91,9 @@ object LocalProxyServer {
     }
 
     private fun handleClient(client: Socket) {
+        // Senza timeout un client zombine blocca per sempre un thread del
+        // pool (readLine appesa): nel tempo accumula thread.
+        client.soTimeout = 15_000
         client.use { socket ->
             try {
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))

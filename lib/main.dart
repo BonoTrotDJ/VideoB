@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,9 +20,12 @@ class VideoBApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const background = Color(0xFF0B0F17);
-    const surface = Color(0xFF131A28);
-    const accent = Color(0xFF3DDC97);
+    // Palette stile chat dark: superfici grigio-carbone, accento verde
+    // acqua, secondario blu. Altro che il navy: qui conta il contrasto
+    // tra pannelli chiari e fondo scuro uniforme.
+    const background = Color(0xFF242424);
+    const surface = Color(0xFF333333);
+    const accent = Color(0xFF49C5B1);
 
     return MaterialApp(
       title: 'VideoB',
@@ -34,7 +36,7 @@ class VideoBApp extends StatelessWidget {
         scaffoldBackgroundColor: background,
         colorScheme: const ColorScheme.dark(
           primary: accent,
-          secondary: Color(0xFF4FC3F7),
+          secondary: Color(0xFF195A9E),
           surface: surface,
         ),
         cardTheme: const CardThemeData(
@@ -44,15 +46,29 @@ class VideoBApp extends StatelessWidget {
             borderRadius: BorderRadius.all(Radius.circular(28)),
           ),
         ),
+        chipTheme: ChipThemeData(
+          backgroundColor: Colors.white.withValues(alpha: 0.07),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.14)),
+          shape: const StadiumBorder(),
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+            letterSpacing: 0.2,
+          ),
+          iconTheme: const IconThemeData(size: 18, color: accent),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          elevation: 0,
+          pressElevation: 0,
+        ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: Colors.white.withValues(alpha: 0.08),
+          fillColor: Colors.white.withValues(alpha: 0.07),
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(30),
             borderSide: BorderSide.none,
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(30),
             borderSide: const BorderSide(color: accent, width: 2),
           ),
         ),
@@ -115,6 +131,10 @@ class _FootballCrestRepository {
   static final Map<String, Future<String?>> _pending =
       <String, Future<String?>>{};
   static final Map<String, String> _cache = <String, String>{};
+  // Cache negativa in memoria: le squadre non trovate non vengono
+  // ritentate a ogni aggiornamento automatico della lista (5 minuti).
+  static final Map<String, DateTime> _missCache = <String, DateTime>{};
+  static const Duration _missCooldown = Duration(minutes: 30);
   static final ValueNotifier<int> _revision = ValueNotifier<int>(0);
   static Timer? _persistDebounce;
   static int _cacheGeneration = 0;
@@ -154,6 +174,7 @@ class _FootballCrestRepository {
     _persistDebounce?.cancel();
     _pending.clear();
     _cache.clear();
+    _missCache.clear();
     await preferences.remove(_storageKey);
     _revision.value += 1;
   }
@@ -187,6 +208,19 @@ class _FootballCrestRepository {
     });
   }
 
+  /// Indica se la squadra e risultata assente di recente dalla API e non va
+  /// ritentata finche non scade la cooldown.
+  static bool _isMissing(String normalized) {
+    final until = _missCache[normalized];
+    return until != null && until.isAfter(DateTime.now());
+  }
+
+  static void _markMissing(String normalized) {
+    if (normalized.isNotEmpty) {
+      _missCache[normalized] = DateTime.now().add(_missCooldown);
+    }
+  }
+
   static Future<String?> crestUrlForTeamWithContext(
     String teamName, {
     String? languageHint,
@@ -201,6 +235,10 @@ class _FootballCrestRepository {
     final cached = _cache[normalized];
     if (cached != null && cached.isNotEmpty) {
       return Future<String?>.value(cached);
+    }
+
+    if (_isMissing(normalized)) {
+      return Future<String?>.value(null);
     }
 
     final existing = _pending[normalized];
@@ -221,10 +259,12 @@ class _FootballCrestRepository {
       }
       if (value != null && value.isNotEmpty) {
         _cache[normalized] = value;
+        _missCache.remove(normalized);
         _schedulePersist();
         _revision.value += 1;
       } else {
         _cache.remove(normalized);
+        _markMissing(normalized);
         _revision.value += 1;
       }
       _pending.remove(normalized);
@@ -239,7 +279,6 @@ class _FootballCrestRepository {
     SharedPreferences preferences,
     void Function(_FootballCrestProgress progress)? onProgress,
   ) async {
-    const maxRounds = 3;
     final requests = <String, _FootballCrestLookupRequest>{};
     for (final entry in entries) {
       if (entry.sportLabel != 'Calcio') {
@@ -284,30 +323,40 @@ class _FootballCrestRepository {
     final total = orderedRequests.length;
     var completed = orderedRequests.where((_FootballCrestLookupRequest request) {
       final normalized = _normalizeKey(request.teamName);
-      return normalized.isEmpty || _cache.containsKey(normalized);
+      return normalized.isEmpty ||
+          _cache.containsKey(normalized) ||
+          _isMissing(normalized);
     }).length;
     var changed = false;
-    for (var round = 0; round < maxRounds; round++) {
-      var roundResolvedAny = false;
-      for (final request in orderedRequests) {
+
+    // I worker partono in parallelo (sovrappone la latenza di rete) ma
+    // l'avvio delle richieste resta con pacing globale, per non superare i
+    // limiti della API.
+    var nextIndex = 0;
+    var nextSlot = DateTime.now();
+    const requestGap = Duration(milliseconds: 2100);
+    const workerCount = 3;
+
+    Future<void> worker() async {
+      while (true) {
+        final i = nextIndex;
+        if (i >= orderedRequests.length) {
+          return;
+        }
+        nextIndex = i + 1;
+
+        final request = orderedRequests[i];
         final teamName = request.teamName;
         final normalized = _normalizeKey(teamName);
         if (normalized.isEmpty) {
-          onProgress?.call(
-            _FootballCrestProgress(
-              completed: completed,
-              total: total,
-              currentTeam: teamName,
-            ),
-          );
           continue;
         }
-        if (_cache.containsKey(normalized)) {
+        if (_cache.containsKey(normalized) || _isMissing(normalized)) {
           onProgress?.call(
             _FootballCrestProgress(
               completed: completed,
               total: total,
-              currentTeam: teamName,
+              currentTeam: null,
             ),
           );
           continue;
@@ -321,7 +370,16 @@ class _FootballCrestRepository {
           ),
         );
 
-        await Future<void>.delayed(const Duration(seconds: 2));
+        final nowTime = DateTime.now();
+        if (nowTime.isBefore(nextSlot)) {
+          await Future<void>.delayed(nextSlot.difference(nowTime));
+        }
+        final currentTime = DateTime.now();
+        nextSlot = (nextSlot.isBefore(currentTime)
+                ? currentTime
+                : nextSlot)
+            .add(requestGap);
+
         final crest = await crestUrlForTeamWithContext(
           teamName,
           languageHint: request.languageHint,
@@ -330,7 +388,6 @@ class _FootballCrestRepository {
         );
         if (crest != null && crest.isNotEmpty) {
           changed = true;
-          roundResolvedAny = true;
         }
         completed = math.min(completed + 1, total);
         onProgress?.call(
@@ -341,18 +398,11 @@ class _FootballCrestRepository {
           ),
         );
       }
-
-      final missingCount = orderedRequests.where((_FootballCrestLookupRequest request) {
-        final normalized = _normalizeKey(request.teamName);
-        return normalized.isNotEmpty && !_cache.containsKey(normalized);
-      }).length;
-      if (missingCount == 0) {
-        break;
-      }
-      if (!roundResolvedAny) {
-        break;
-      }
     }
+
+    await Future.wait(<Future<void>>[
+      for (var w = 0; w < workerCount; w++) worker(),
+    ]);
 
     onProgress?.call(
       _FootballCrestProgress(
@@ -733,7 +783,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   static const _playerModeKey = 'preferred_player_mode_v1';
   static const _backupPayloadVersion = 1;
   static const _appDisplayName = 'Video BonoTrot';
-  static const _appVersion = '1.0.18+26';
+  static const _appVersion = '1.0.19+27';
   static const _projectUrl = 'https://github.com/BonoTrotDJ/VideoB';
   static const List<String> _weekdayLabels = <String>[
     'Domenica',
@@ -2399,8 +2449,9 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     List<_VideoEntry> entries,
   ) {
     final now = DateTime.now();
-    final byUrl = <String, _SavedLink>{
-      for (final link in existing) _savedLinkKey(link.url): link,
+    final byKey = <String, _SavedLink>{
+      for (final link in existing)
+        _savedLinkKey(link.label, link.language): link,
     };
     for (final entry in entries) {
       final channels = entry.channels.isNotEmpty
@@ -2418,7 +2469,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         if (channel.url.isEmpty) continue;
         final url = channel.url.trim();
         if (url.isEmpty) continue;
-        byUrl[_savedLinkKey(url)] = _SavedLink(
+        byKey[_savedLinkKey(channel.label, channel.language)] = _SavedLink(
           url: url,
           label: channel.label,
           language: channel.language,
@@ -2428,9 +2479,14 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       }
     }
     final cutoff = now.subtract(_savedLinkRetention);
-    return byUrl.values
-        .where((_SavedLink link) => link.lastSeen.isAfter(cutoff))
-        .toList()
+    // Il DNS dedupe avviene gia' tramite byUrl, ma si ripassa _dedupeSavedLinks
+    // per garantire l'unicita' assoluta anche se il codice cambia in futuro:
+    // nessun canale deve mai comparire due volte nella lista salvata.
+    return _dedupeSavedLinks(
+      byKey.values
+          .where((_SavedLink link) => link.lastSeen.isAfter(cutoff))
+          .toList(),
+    )
       ..sort((_SavedLink a, _SavedLink b) => a.label.compareTo(b.label));
   }
 
@@ -3278,12 +3334,13 @@ class _VideoBHomePageState extends State<VideoBHomePage>
             decoration: const BoxDecoration(
               gradient: LinearGradient(
                 colors: <Color>[
-                  Color(0xFF07111F),
-                  Color(0xFF0D1D33),
-                  Color(0xFF081018),
+                  Color(0xFF2A2A2A),
+                  Color(0xFF242424),
+                  Color(0xFF1E1E1E),
                 ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                stops: <double>[0.0, 0.6, 1.0],
               ),
             ),
             child: SafeArea(
@@ -3300,15 +3357,18 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                           controller: _mainScrollController,
                           thumbVisibility: true,
                           trackVisibility: true,
-                          child: ListView(
+                          child: CustomScrollView(
                             controller: _mainScrollController,
-                            padding: EdgeInsets.fromLTRB(
-                              contentPadding.left * uiScale,
-                              contentPadding.top * uiScale,
-                              contentPadding.right * uiScale,
-                              contentPadding.bottom * uiScale,
-                            ),
-                            children: <Widget>[
+                            slivers: <Widget>[
+                              SliverPadding(
+                                padding: EdgeInsets.fromLTRB(
+                                  contentPadding.left * uiScale,
+                                  contentPadding.top * uiScale,
+                                  contentPadding.right * uiScale,
+                                  contentPadding.bottom * uiScale,
+                                ),
+                                sliver: SliverList(
+                                  delegate: SliverChildListDelegate(<Widget>[
                               _SectionCard(
                                 title: selectedList.name,
                                 subtitle: '',
@@ -3327,6 +3387,11 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                                             _isScanningNowMode)) ...<Widget>[
                                       const SizedBox(height: 18),
                                       _buildNowModeProgress(theme),
+                                    ],
+                                    if (_crestScanTotal > 0 &&
+                                        !_crestScanDismissed) ...<Widget>[
+                                      const SizedBox(height: 18),
+                                      _buildCrestProgress(theme),
                                     ],
                                     const SizedBox(height: 18),
                                     if (_activeEntryName != null) ...<Widget>[
@@ -3379,47 +3444,126 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                                   style: theme.textTheme.bodyLarge?.copyWith(
                                     color: Colors.white70,
                                   ),
-                                )
-                              else if (selectedList.sourceType ==
+                                ),
+                                  ]),
+                                ),
+                              ),
+                              if (selectedList.sourceType ==
                                       _VideoListSourceType.imported &&
                                   _isNowMode)
-                                _buildEntryGrid(
+                                _buildEntryGridSliver(
                                   selectedList,
                                   _uniqueNowModeEntries,
                                 )
                               else
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: _groupedFilteredEntries.expand(
-                                    (MapEntry<String, List<_VideoEntry>> group) {
-                                      return <Widget>[
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 16,
-                                            bottom: 10,
-                                          ),
+                                ..._groupedFilteredEntries.expand(
+                                  (MapEntry<String, List<_VideoEntry>> group) {
+                                    return <Widget>[
+                                      SliverPadding(
+                                        padding: EdgeInsets.only(
+                                          top: 16,
+                                          bottom: 10,
+                                          left: contentPadding.left * uiScale,
+                                          right: contentPadding.right * uiScale,
+                                        ),
+                                        sliver: SliverToBoxAdapter(
+                                          // Testata sezione stile TV: barra
+                                          // d'accento, icona tintata, numero
+                                          // eventi e divisore sfumato.
                                           child: Row(
                                             children: <Widget>[
-                                              const Icon(
-                                                Icons.calendar_today_rounded,
-                                                size: 20,
+                                              Container(
+                                                width: 4,
+                                                height: 26,
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF49C5B1),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          999),
+                                                ),
                                               ),
-                                              const SizedBox(width: 8),
+                                              const SizedBox(width: 12),
+                                              Container(
+                                                padding: const EdgeInsets
+                                                    .all(7),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF49C5B1)
+                                                      .withValues(alpha: 0.14),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          10),
+                                                ),
+                                                child: const Icon(
+                                                  Icons
+                                                      .calendar_today_rounded,
+                                                  size: 16,
+                                                  color: Color(0xFF49C5B1),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
                                               Text(
                                                 group.key,
                                                 style: theme
                                                     .textTheme.headlineSmall
                                                     ?.copyWith(
-                                                  fontWeight: FontWeight.w700,
+                                                  fontWeight: FontWeight.w800,
+                                                  letterSpacing: -0.4,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Container(
+                                                padding: const EdgeInsets
+                                                    .symmetric(
+                                                  horizontal: 10,
+                                                  vertical: 3,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white
+                                                      .withValues(
+                                                          alpha: 0.08),
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                          999),
+                                                ),
+                                                child: Text(
+                                                  '${group.value.length}',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: Colors.white
+                                                        .withValues(
+                                                            alpha: 0.65),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 14),
+                                              Expanded(
+                                                child: Container(
+                                                  height: 1,
+                                                  decoration: BoxDecoration(
+                                                    gradient: LinearGradient(
+                                                      colors: <Color>[
+                                                        Colors.white
+                                                            .withValues(
+                                                                alpha: 0.12),
+                                                        Colors.white
+                                                            .withValues(
+                                                                alpha: 0.0),
+                                                      ],
+                                                    ),
+                                                  ),
                                                 ),
                                               ),
                                             ],
                                           ),
                                         ),
-                                        _buildEntryGrid(selectedList, group.value),
-                                      ];
-                                    },
-                                  ).toList(),
+                                      ),
+                                      _buildEntryGridSliver(
+                                        selectedList,
+                                        group.value,
+                                      ),
+                                    ];
+                                  },
                                 ),
                             ],
                           ),
@@ -3755,10 +3899,6 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         return;
       }
 
-      if (!mounted || _selectedListId != list.id || !_isNowMode) {
-        return;
-      }
-
       setState(() {
         _nowScanCompleted += 1;
       });
@@ -3896,13 +4036,16 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     );
   }
 
-  Widget _buildEntryGrid(_VideoList list, List<_VideoEntry> entries) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final spacing = _isAmazonFireTv ? 10.0 : 14.0;
-        final maxWidth = constraints.maxWidth.isFinite
-            ? constraints.maxWidth
-            : MediaQuery.of(context).size.width;
+  Widget _buildEntryGridSliver(_VideoList list, List<_VideoEntry> entries) {
+    final spacing = _isAmazonFireTv ? 10.0 : 14.0;
+    final useFixedAspectRatio =
+        list.sourceType == _VideoListSourceType.imported && _isNowMode;
+
+    return SliverLayoutBuilder(
+      // `SliverConstraints` non è esportato da material.dart: si lascia
+      // dedurre il tipo dalla firma di SliverLayoutBuilder.
+      builder: (context, constraints) {
+        final maxWidth = constraints.crossAxisExtent;
         final targetCardWidth = _isAmazonFireTv
             ? switch (maxWidth) {
                 >= 1500 => 220.0,
@@ -3924,84 +4067,104 @@ class _VideoBHomePageState extends State<VideoBHomePage>
         );
         final cardSize =
             (maxWidth - ((columnCount - 1) * spacing)) / columnCount;
-        final useFixedAspectRatio =
-            list.sourceType == _VideoListSourceType.imported && _isNowMode;
+        final rowCount = (entries.length + columnCount - 1) ~/ columnCount;
 
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Wrap(
-            spacing: spacing,
-            runSpacing: spacing,
-            children: entries
-                .map(
-                  (_VideoEntry entry) => SizedBox(
-                    width: cardSize,
-                    child: _FocusRebuilder(
-                      notifier: _focusedEntryNotifier,
-                      refresh: _liveTick,
-                      entryId: entry.id,
-                      builder: (BuildContext context) => Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        useFixedAspectRatio
-                            ? AspectRatio(
-                                aspectRatio: 16 / 7,
-                                child: _buildEntryTile(list, entry),
-                              )
-                            : _buildEntryTile(list, entry),
-                        if (list.sourceType == _VideoListSourceType.manual)
-                          Focus(
-                            child: Builder(
-                              builder: (BuildContext ctx) {
-                                final hasFocus = Focus.of(ctx).hasFocus;
-                                return AnimatedContainer(
-                                  duration: const Duration(milliseconds: 150),
-                                  margin: const EdgeInsets.only(top: 6),
-                                  decoration: BoxDecoration(
-                                    color: hasFocus
-                                        ? Colors.white
-                                        : Colors.white.withValues(alpha: 0.06),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(12),
-                                    onTap: () => _deleteEntry(entry),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 8),
-                                      child: Row(
-                                        mainAxisAlignment: MainAxisAlignment.center,
-                                        children: <Widget>[
-                                          Icon(
-                                            Icons.delete_outline_rounded,
-                                            size: 18,
-                                            color: hasFocus
-                                                ? const Color(0xFFFF4444)
-                                                : Colors.white54,
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            'Elimina',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: hasFocus
-                                                  ? const Color(0xFFFF4444)
-                                                  : Colors.white54,
+        return SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (BuildContext context, int rowIndex) {
+              final start = rowIndex * columnCount;
+              final end = math.min(start + columnCount, entries.length);
+              return Padding(
+                padding: EdgeInsets.only(bottom: spacing == 10 ? 14 : spacing),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    for (var i = start; i < end; i++) ...<Widget>[
+                      if (i != start) SizedBox(width: spacing),
+                      SizedBox(
+                        width: cardSize,
+                        child: _FocusRebuilder(
+                          notifier: _focusedEntryNotifier,
+                          refresh: _liveTick,
+                          entryId: entries[i].id,
+                          isLive: () => _isEntryLive(entries[i]),
+                          builder: (BuildContext context) => Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              useFixedAspectRatio
+                                  ? AspectRatio(
+                                      aspectRatio: 16 / 7,
+                                      child: _buildEntryTile(list, entries[i]),
+                                    )
+                                  : _buildEntryTile(list, entries[i]),
+                              if (list.sourceType ==
+                                  _VideoListSourceType.manual)
+                                Focus(
+                                  child: Builder(
+                                    builder: (BuildContext ctx) {
+                                      final hasFocus = Focus.of(ctx).hasFocus;
+                                      return AnimatedContainer(
+                                        duration:
+                                            const Duration(milliseconds: 150),
+                                        margin:
+                                            const EdgeInsets.only(top: 6),
+                                        decoration: BoxDecoration(
+                                          color: hasFocus
+                                              ? Colors.white
+                                              : Colors.white
+                                                  .withValues(alpha: 0.06),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                        ),
+                                        child: InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          onTap: () => _deleteEntry(entries[i]),
+                                          child: Padding(
+                                            padding: const EdgeInsets
+                                                .symmetric(vertical: 8),
+                                            child: Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment.center,
+                                              children: <Widget>[
+                                                Icon(
+                                                  Icons
+                                                      .delete_outline_rounded,
+                                                  size: 18,
+                                                  color: hasFocus
+                                                      ? const Color(
+                                                          0xFFFF4444)
+                                                      : Colors.white54,
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Text(
+                                                  'Elimina',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: hasFocus
+                                                        ? const Color(
+                                                            0xFFFF4444)
+                                                        : Colors.white54,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
-                                        ],
-                                      ),
-                                    ),
+                                        ),
+                                      );
+                                    },
                                   ),
-                                );
-                              },
-                            ),
+                                ),
+                            ],
                           ),
-                      ],
-                    ),
-                    ),
-                  ),
-                )
-                .toList(),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
+            childCount: rowCount,
           ),
         );
       },
@@ -4020,8 +4183,10 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     final titleFontSize = compact ? 14.0 : 17.0;
     final metaFontSize = compact ? 11.0 : 13.0;
     final isFocused = _focusedEntryNotifier.value == entry.id;
+    // Stile TV moderno: al focus la card si ingrandisce leggermente e il
+    // bordo assume il colore dello sport, con glow morbido.
     final borderColor =
-        isFocused ? Colors.white : Colors.white.withValues(alpha: 0.08);
+        isFocused ? accent : Colors.white.withValues(alpha: 0.07);
     final channels =
         entry.channels.isNotEmpty ? entry.channels : <_VideoChannel>[];
     final eventTime = entry.eventTime?.trim() ?? '';
@@ -4056,19 +4221,61 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       },
       child: GestureDetector(
         onTap: () => _openEntryWithChannelPicker(entry),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 100),
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          scale: isFocused ? 1.045 : 1.0,
+          child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
           decoration: BoxDecoration(
-            color: isFocused ? const Color(0xFF1B2538) : const Color(0xFF131A28),
-            borderRadius: BorderRadius.circular(18),
+            color: isFocused
+                ? const Color(0xFF3F3F3F)
+                : const Color(0xFF333333),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(color: borderColor, width: isFocused ? 2 : 1),
+            // Glow sul focus: la scheda selezionata col telecomando si
+            // distingue a distanza, non solo dal bordo. Le card non
+            // a fuoco hanno una leggera profondità dallo sfondo.
+            boxShadow: isFocused
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.38),
+                      blurRadius: 24,
+                      spreadRadius: 1,
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.30),
+                      blurRadius: 10,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
           ),
           clipBehavior: Clip.antiAlias,
           child: IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                Container(width: 5, color: accent),
+                // Striscia sportiva con dissolvenza verticale.
+                Container(
+                  width: 5,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        accent,
+                        accent.withValues(alpha: 0.15),
+                      ],
+                    ),
+                  ),
+                ),
                 Expanded(
                   child: Padding(
                     padding: EdgeInsets.all(tilePadding),
@@ -4123,6 +4330,13 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFE5484D),
                                   borderRadius: BorderRadius.circular(999),
+                                  boxShadow: <BoxShadow>[
+                                    BoxShadow(
+                                      color: const Color(0xFFE5484D)
+                                          .withValues(alpha: 0.45),
+                                      blurRadius: 8,
+                                    ),
+                                  ],
                                 ),
                                 child: Text(
                                   'LIVE',
@@ -4188,8 +4402,9 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                               vertical: compact ? 8 : 10,
                             ),
                             decoration: BoxDecoration(
-                              color: accent.withValues(alpha: isFocused ? 0.9 : 0.16),
-                              borderRadius: BorderRadius.circular(12),
+                              color: accent.withValues(alpha: isFocused ? 0.9 : 0.14),
+                              borderRadius:
+                                  BorderRadius.circular(compact ? 10 : 999),
                             ),
                             child: Row(
                               children: <Widget>[
@@ -4203,7 +4418,9 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                                 const SizedBox(width: 6),
                                 Expanded(
                                   child: Text(
-                                    channelSummary,
+                                    isFocused
+                                        ? 'Guarda ▸  $channelSummary'
+                                        : channelSummary,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -4226,6 +4443,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
               ],
             ),
           ),
+          ),
         ),
       ),
     );
@@ -4234,7 +4452,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
   Color _sportAccent(String? sportLabel) {
     switch (sportLabel) {
       case 'Calcio':
-        return const Color(0xFF3DDC97);
+        return const Color(0xFF49C5B1);
       case 'Basket':
         return const Color(0xFFFF9F43);
       case 'Tennis':
@@ -4285,8 +4503,8 @@ class _VideoBHomePageState extends State<VideoBHomePage>
     final languageLabel = entry.language?.trim() ?? '';
     final backgroundLabel = _nowModeBackgroundLabel(entry);
     final borderColor = isFocused
-        ? Colors.white
-        : Colors.white.withValues(alpha: 0.16);
+        ? const Color(0xFF49C5B1)
+        : Colors.white.withValues(alpha: 0.10);
 
     return Focus(
       onFocusChange: (bool hasFocus) {
@@ -4308,15 +4526,34 @@ class _VideoBHomePageState extends State<VideoBHomePage>
       },
       child: GestureDetector(
         onTap: () => _openEntryWithChannelPicker(entry),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 100),
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          scale: isFocused ? 1.045 : 1.0,
+          child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
           decoration: BoxDecoration(
-            color: const Color(0xFF154C79),
-            borderRadius: BorderRadius.circular(22),
+            color: const Color(0xFF195A9E),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: borderColor,
               width: isFocused ? 2 : 1,
             ),
+            boxShadow: isFocused
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: const Color(0xFF49C5B1).withValues(alpha: 0.35),
+                      blurRadius: 22,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.28),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
           ),
           child: Stack(
             children: <Widget>[
@@ -4414,6 +4651,7 @@ class _VideoBHomePageState extends State<VideoBHomePage>
                 ),
               ),
             ],
+          ),
           ),
         ),
       ),
@@ -4810,6 +5048,29 @@ class _FootballTeamCrest extends StatelessWidget {
                         ? Image.network(
                             badgeUrl,
                             fit: BoxFit.contain,
+                            // Decodifica il PNG a risoluzione ridotta: gli
+                            // stemmi arrivano a ~300px ma la casella e 54px,
+                            // evita di tenere in memoria bitmap grandi.
+                            cacheWidth: 108,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.low,
+                            // Respiro visivo in entrata: niente pop brusco
+                            // quando l'immagine arriva dal network.
+                            frameBuilder: (BuildContext context,
+                                Widget? child,
+                                int? frame,
+                                bool wasSynchronouslyLoaded) {
+                              if (child == null ||
+                                  wasSynchronouslyLoaded ||
+                                  frame == null) {
+                                return child ?? _FootballTeamFallback(name: teamName);
+                              }
+                              return AnimatedOpacity(
+                                opacity: 1.0,
+                                duration: const Duration(milliseconds: 220),
+                                child: child,
+                              );
+                            },
                             errorBuilder: (_, __, ___) =>
                                 _FootballTeamFallback(name: teamName),
                           )
@@ -4956,23 +5217,41 @@ class _CreateListPageState extends State<_CreateListPage> {
   }) async {
     const channel = MethodChannel('videob/channel');
 
-    final value = await channel.invokeMethod<String>(
-      'editText',
-      <String, dynamic>{
-        'title': title,
-        'initialValue': controller.text,
-        'hint': hint,
-        'isUrl': isUrl,
-      },
-    );
+    String? value;
+    try {
+      value = await channel.invokeMethod<String>(
+        'editText',
+        <String, dynamic>{
+          'title': title,
+          'initialValue': controller.text,
+          'hint': hint,
+          'isUrl': isUrl,
+        },
+      );
+    } on PlatformException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.maybeOf(context)
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(error.message ?? 'Impossibile aprire l\'editor.'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      return;
+    }
 
-    if (value == null || !mounted) {
+    final String text = value ?? '';
+    if (text.isEmpty || !mounted) {
       return;
     }
 
     setState(() {
-      controller.text = value;
-      controller.selection = TextSelection.collapsed(offset: value.length);
+      controller.text = text;
+      controller.selection = TextSelection.collapsed(offset: text.length);
     });
   }
 
@@ -5139,22 +5418,39 @@ class _CreateListPageState extends State<_CreateListPage> {
   }
 }
 
-String _savedLinkKey(String url) => url.trim();
+/// Identita' di un link salvato: l'etichetta del canale (+ lingua), NON
+/// l'URL. Il sito rigenera a ogni aggiornamento host e percorso casuali
+/// (es. b19v29.xxx.net/hls/abc123.m3u8), quindi lo stesso canale arriva
+/// sempre con URL diversa: deduplicare per URL non eliminerebbe nulla.
+String _savedLinkKey(String label, String language) {
+  final channel = label.trim().toLowerCase();
+  final lang = language.trim().toLowerCase();
+  return '${channel.isEmpty ? 'canale' : channel}|$lang';
+}
 
 List<_SavedLink> _dedupeSavedLinks(Iterable<_SavedLink> links) {
-  final byUrl = <String, _SavedLink>{};
+  final byKey = <String, _SavedLink>{};
   for (final link in links) {
     final url = link.url.trim();
     if (url.isEmpty) continue;
-    byUrl[_savedLinkKey(url)] = url == link.url ? link : _SavedLink(
-      url: url,
-      label: link.label,
-      language: link.language,
-      lastEvent: link.lastEvent,
-      lastSeen: link.lastSeen,
-    );
+    final normalized = url == link.url
+        ? link
+        : _SavedLink(
+            url: url,
+            label: link.label,
+            language: link.language,
+            lastEvent: link.lastEvent,
+            lastSeen: link.lastSeen,
+          );
+    final key = _savedLinkKey(link.label, link.language);
+    final existing = byKey[key];
+    // A parita' di canale vince la rilevazione piu' recente: URL, token e
+    // dettagli evento vecchi non sopravvivono al caricamento.
+    if (existing == null || !normalized.lastSeen.isBefore(existing.lastSeen)) {
+      byKey[key] = normalized;
+    }
   }
-  return byUrl.values.toList();
+  return byKey.values.toList();
 }
 
 class _VideoList {
@@ -5370,17 +5666,33 @@ class _SectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Card(
+        return Card(
       child: Padding(
         padding: const EdgeInsets.all(22),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              title,
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+            Row(
+              children: <Widget>[
+                Container(
+                  width: 5,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF49C5B1),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+              ],
             ),
             if (subtitle.trim().isNotEmpty) ...<Widget>[
               const SizedBox(height: 6),
@@ -5410,6 +5722,7 @@ class _FocusRebuilder extends StatefulWidget {
     required this.entryId,
     required this.builder,
     this.refresh,
+    this.isLive,
   });
 
   final Listenable? refresh;
@@ -5417,12 +5730,17 @@ class _FocusRebuilder extends StatefulWidget {
   final String entryId;
   final WidgetBuilder builder;
 
+  /// Risolve lo stato LIVE della scheda: il tick periodico ricostruisce la
+  /// scheda solo quando lo stato LIVE cambia davvero, non a ogni tick.
+  final bool Function()? isLive;
+
   @override
   State<_FocusRebuilder> createState() => _FocusRebuilderState();
 }
 
 class _FocusRebuilderState extends State<_FocusRebuilder> {
   late bool _focused = widget.notifier.value == widget.entryId;
+  late bool _lastLive = widget.isLive?.call() ?? false;
 
   @override
   void initState() {
@@ -5432,7 +5750,25 @@ class _FocusRebuilderState extends State<_FocusRebuilder> {
   }
 
   void _onRefresh() {
+    final resolver = widget.isLive;
+    if (resolver != null) {
+      final live = resolver();
+      if (live == _lastLive) {
+        // Niente transizione LIVE: nessuna parte visibile della scheda
+        // dipende dal tempo, rebuild inutile.
+        return;
+      }
+      _lastLive = live;
+    }
     if (mounted) setState(() {});
+  }
+
+  @override
+  void didUpdateWidget(_FocusRebuilder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isLive == null && widget.isLive != null) {
+      _lastLive = widget.isLive!.call();
+    }
   }
 
   @override
